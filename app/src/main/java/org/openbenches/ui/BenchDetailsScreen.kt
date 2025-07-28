@@ -64,19 +64,15 @@ import java.time.ZonedDateTime
 import java.time.format.DateTimeParseException
 import java.util.Locale
 import androidx.compose.foundation.layout.height
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.MapUiSettings
-import com.google.maps.android.compose.MapProperties
-import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.MarkerState
-import com.google.maps.android.compose.rememberCameraPositionState
 import org.openbenches.data.fetchAddressFromLatLng
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material.icons.filled.Layers
-import com.google.maps.android.compose.MapType
+import androidx.compose.ui.viewinterop.AndroidView
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.CustomZoomButtonsController
+import android.content.Context
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyRow
@@ -296,56 +292,119 @@ fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Uni
                                 .fillMaxWidth()
                                 .padding(bottom = 8.dp)
                         )
-                        val googleMapType = remember { mutableStateOf(MapType.NORMAL) }
-                        val cameraPositionState = rememberCameraPositionState {
-                            position = com.google.android.gms.maps.model.CameraPosition.fromLatLngZoom(
-                                com.google.android.gms.maps.model.LatLng(lat, lng), 16f
-                            )
-                        }
-                        Box(modifier = Modifier.fillMaxWidth().height(220.dp).padding(horizontal = 16.dp)) {
-                            val showLayerMenu = remember { mutableStateOf(false) }
-                            GoogleMap(
-                                modifier = Modifier.matchParentSize(),
-                                cameraPositionState = cameraPositionState,
-                                uiSettings = MapUiSettings(zoomControlsEnabled = false),
-                                properties = MapProperties(isMyLocationEnabled = false, mapType = googleMapType.value)
-                            ) {
-                                Marker(
-                                    state = MarkerState(
-                                        position = com.google.android.gms.maps.model.LatLng(lat, lng)
-                                    ),
-                                    title = "Bench Location"
-                                )
+                        AndroidView(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp)
+                                .padding(horizontal = 16.dp),
+                            factory = { ctx ->
+                                // Configure osmdroid
+                                Configuration.getInstance().load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+                                
+                                // Set tile cache size for better performance
+                                Configuration.getInstance().tileFileSystemCacheMaxBytes = 20L * 1024L * 1024L // 20MB cache
+                                Configuration.getInstance().tileDownloadThreads = 4 // Download threads
+                                Configuration.getInstance().tileDownloadMaxQueueSize = 50 // Download queue
+                                
+                                val mapView = MapView(ctx)
+                                
+                                // Set tile source to OpenStreetMap
+                                mapView.setTileSource(TileSourceFactory.MAPNIK)
+                                
+                                // Configure map for bench details view
+                                mapView.setMultiTouchControls(true)
+                                mapView.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                                
+                                // Enable tile preloading for smoother experience
+                                mapView.isTilesScaledToDpi = true
+                                mapView.isHorizontalMapRepetitionEnabled = true
+                                mapView.isVerticalMapRepetitionEnabled = true
+                                
+                                // Enable hardware acceleration for smoother rendering
+                                mapView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                                
+                                // Set tile overlay options for better performance
+                                mapView.overlayManager.tilesOverlay?.setLoadingBackgroundColor(android.graphics.Color.TRANSPARENT)
+                                mapView.overlayManager.tilesOverlay?.setLoadingLineColor(android.graphics.Color.TRANSPARENT)
+                                
+                                // Set initial position and zoom
+                                val benchLocation = GeoPoint(lat, lng)
+                                mapView.controller.setZoom(16.0) // Closer zoom for bench details
+                                mapView.controller.setCenter(benchLocation)
+                                
+                                // Add bench marker
+                                val marker = Marker(mapView)
+                                marker.position = benchLocation
+                                marker.title = "Bench Location"
+                                marker.subDescription = "Tap to see bench details"
+                                marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                
+                                // Add click listener to show info window
+                                marker.setOnMarkerClickListener { m, _ ->
+                                    if (!m.isInfoWindowShown) {
+                                        m.showInfoWindow()
+                                    }
+                                    true
+                                }
+                                
+                                // Create custom marker icon (optional - you can use default or custom)
+                                try {
+                                    val markerBitmapRaw = android.graphics.BitmapFactory.decodeResource(
+                                        ctx.resources, 
+                                        ctx.resources.getIdentifier("marker", "drawable", ctx.packageName)
+                                    )
+                                    if (markerBitmapRaw != null) {
+                                        val markerBitmap = android.graphics.Bitmap.createScaledBitmap(markerBitmapRaw, 98, 64, true)
+                                        val markerDrawable = android.graphics.drawable.BitmapDrawable(ctx.resources, markerBitmap)
+                                        marker.icon = markerDrawable
+                                    }
+                                } catch (e: Exception) {
+                                    // Use default marker if custom marker fails to load
+                                }
+                                
+                                mapView.overlays.add(marker)
+                                mapView
+                            },
+                            update = { mapView ->
+                                // Update map if needed (e.g., if bench location changes)
+                                val benchLocation = GeoPoint(lat, lng)
+                                mapView.controller.setCenter(benchLocation)
+                                
+                                // Update marker position
+                                mapView.overlays.clear()
+                                val marker = Marker(mapView)
+                                marker.position = benchLocation
+                                marker.title = "Bench Location"
+                                marker.subDescription = "Tap to see bench details"
+                                marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                
+                                // Add click listener to show info window
+                                marker.setOnMarkerClickListener { m, _ ->
+                                    if (!m.isInfoWindowShown) {
+                                        m.showInfoWindow()
+                                    }
+                                    true
+                                }
+                                
+                                // Recreate marker icon
+                                try {
+                                    val markerBitmapRaw = android.graphics.BitmapFactory.decodeResource(
+                                        mapView.context.resources, 
+                                        mapView.context.resources.getIdentifier("marker", "drawable", mapView.context.packageName)
+                                    )
+                                    if (markerBitmapRaw != null) {
+                                        val markerBitmap = android.graphics.Bitmap.createScaledBitmap(markerBitmapRaw, 98, 64, true)
+                                        val markerDrawable = android.graphics.drawable.BitmapDrawable(mapView.context.resources, markerBitmap)
+                                        marker.icon = markerDrawable
+                                    }
+                                } catch (e: Exception) {
+                                    // Use default marker if custom marker fails to load
+                                }
+                                
+                                mapView.overlays.add(marker)
+                                mapView.invalidate()
                             }
-                            FloatingActionButton(
-                                onClick = { showLayerMenu.value = true },
-                                modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 8.dp).size(40.dp)
-                            ) {
-                                Icon(Icons.Filled.Layers, contentDescription = "Map Layer")
-                            }
-                            DropdownMenu(
-                                expanded = showLayerMenu.value,
-                                onDismissRequest = { showLayerMenu.value = false },
-                                modifier = Modifier.align(Alignment.TopEnd)
-                            ) {
-                                DropdownMenuItem(text = { Text("Normal") }, onClick = {
-                                    googleMapType.value = MapType.NORMAL
-                                    showLayerMenu.value = false
-                                })
-                                DropdownMenuItem(text = { Text("Satellite") }, onClick = {
-                                    googleMapType.value = MapType.SATELLITE
-                                    showLayerMenu.value = false
-                                })
-                                DropdownMenuItem(text = { Text("Hybrid") }, onClick = {
-                                    googleMapType.value = MapType.HYBRID
-                                    showLayerMenu.value = false
-                                })
-                                DropdownMenuItem(text = { Text("Terrain") }, onClick = {
-                                    googleMapType.value = MapType.TERRAIN
-                                    showLayerMenu.value = false
-                                })
-                            }
-                        }
+                        )
                         // Centered 'Near:' text
                         Text(
                             text = "Near:",

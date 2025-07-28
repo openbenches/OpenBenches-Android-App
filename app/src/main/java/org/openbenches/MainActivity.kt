@@ -70,8 +70,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.platform.LocalContext
 import org.openbenches.ui.MapProvider
-import com.google.maps.android.compose.MapType
-import androidx.compose.material.icons.filled.Layers
+
 import org.openbenches.ui.BenchDetailsScreen
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.filled.LocationOn
@@ -108,8 +107,7 @@ class MainActivity : ComponentActivity() {
                 var showTermsDialog by remember { mutableStateOf(false) }
                 var showLeaderboardDialog by remember { mutableStateOf(false) }
                 var showColophonDialog by remember { mutableStateOf(false) }
-                var mapProvider by remember { mutableStateOf(MapProvider.GOOGLE) }
-                var googleMapType by remember { mutableStateOf(MapType.TERRAIN) }
+                var mapProvider by remember { mutableStateOf(MapProvider.OSM) }
                 var showLayerMenu by remember { mutableStateOf(false) }
                 var showBenchDetails by remember { mutableStateOf(false) }
                 var selectedBenchId by remember { mutableStateOf<Int?>(null) }
@@ -183,7 +181,6 @@ class MainActivity : ComponentActivity() {
                                 mapCenter = mapCenter,
                                 setMapCenter = { mapCenter = it },
                                 mapProvider = mapProvider,
-                                googleMapType = googleMapType,
                                 onBenchPopupClick = { benchId ->
                                     selectedBenchId = benchId
                                     showBenchDetails = true
@@ -193,51 +190,6 @@ class MainActivity : ComponentActivity() {
                                 shouldAnimateToMapCenter = shouldAnimateToMapCenter,
                                 onMapCenterAnimated = { shouldAnimateToMapCenter = false }
                             )
-                            // Top right: Map Layer FAB
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                            ) {
-                                var showLayerMenuTop by remember { mutableStateOf(false) }
-                                FloatingActionButton(
-                                    onClick = { showLayerMenuTop = true },
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(top = 48.dp, end = 24.dp)
-                                ) {
-                                    Icon(Icons.Filled.Layers, contentDescription = "Map Layer")
-                                }
-                                DropdownMenu(
-                                    expanded = showLayerMenuTop,
-                                    onDismissRequest = { showLayerMenuTop = false },
-                                    modifier = Modifier.align(Alignment.TopEnd)
-                                ) {
-                                    DropdownMenuItem(text = { Text("OpenStreetMap") }, onClick = {
-                                        mapProvider = MapProvider.OSM
-                                        showLayerMenuTop = false
-                                    })
-                                    DropdownMenuItem(text = { Text("Google Maps - Normal") }, onClick = {
-                                        mapProvider = MapProvider.GOOGLE
-                                        googleMapType = MapType.NORMAL
-                                        showLayerMenuTop = false
-                                    })
-                                    DropdownMenuItem(text = { Text("Google Maps - Satellite") }, onClick = {
-                                        mapProvider = MapProvider.GOOGLE
-                                        googleMapType = MapType.SATELLITE
-                                        showLayerMenuTop = false
-                                    })
-                                    DropdownMenuItem(text = { Text("Google Maps - Hybrid") }, onClick = {
-                                        mapProvider = MapProvider.GOOGLE
-                                        googleMapType = MapType.HYBRID
-                                        showLayerMenuTop = false
-                                    })
-                                    DropdownMenuItem(text = { Text("Google Maps - Terrain") }, onClick = {
-                                        mapProvider = MapProvider.GOOGLE
-                                        googleMapType = MapType.TERRAIN
-                                        showLayerMenuTop = false
-                                    })
-                                }
-                            }
                             // Bottom left: Other FABs
                             Row(
                                 modifier = Modifier
