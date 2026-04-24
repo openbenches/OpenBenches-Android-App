@@ -1,6 +1,7 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -8,14 +9,25 @@ android {
     namespace = "org.openbenches"
     compileSdk = 35
 
+    val auth0Domain = (project.findProperty("AUTH0_DOMAIN") as String?) ?: "openbenches.eu.auth0.com"
+    // Native Auth0 client id (do NOT embed a client secret in the Android app)
+    val auth0ClientId = (project.findProperty("AUTH0_CLIENT_ID") as String?) ?: "ulXaB9bSF2Bar9UtM5NhFBWBUAesrorM"
+    val auth0Scheme = (project.findProperty("AUTH0_SCHEME") as String?) ?: "openbenches"
+
     defaultConfig {
         applicationId = "org.openbenches"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4
+        versionName = "1.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        manifestPlaceholders["auth0Domain"] = auth0Domain
+        manifestPlaceholders["auth0Scheme"] = auth0Scheme
+        buildConfigField("String", "AUTH0_DOMAIN", "\"$auth0Domain\"")
+        buildConfigField("String", "AUTH0_CLIENT_ID", "\"$auth0ClientId\"")
+        buildConfigField("String", "AUTH0_SCHEME", "\"$auth0Scheme\"")
     }
 
     buildTypes {
@@ -31,11 +43,20 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = "11"
-    }
     buildFeatures {
         compose = true
+        buildConfig = true
+    }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_11)
     }
 }
 
@@ -44,18 +65,18 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
+    implementation(platform(libs.compose.bom))
+    implementation(libs.ui)
+    implementation(libs.ui.graphics)
+    implementation(libs.ui.tooling.preview)
+    implementation(libs.material3)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
-    debugImplementation(libs.androidx.ui.test.manifest)
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.ui.test.junit4)
+    debugImplementation(libs.ui.tooling)
+    debugImplementation(libs.ui.test.manifest)
 
     // osmdroid for OpenStreetMap
     implementation("org.osmdroid:osmdroid-android:6.1.16")
@@ -63,9 +84,10 @@ dependencies {
     // Retrofit for networking
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("com.auth0.android:auth0:2.11.0")
 
     // Sentry for error logging
-    implementation("io.sentry:sentry-android:7.6.0")
+    implementation("io.sentry:sentry-android:8.37.1")
 
     // Compose UI Test
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.6.1")
@@ -81,13 +103,12 @@ dependencies {
     // Accompanist permissions for runtime permission handling in Compose
     implementation("com.google.accompanist:accompanist-permissions:0.34.0")
 
-    // Google Maps Compose and Play Services Maps
-    implementation("com.google.maps.android:maps-compose:2.11.4")
-    implementation("com.google.android.gms:play-services-maps:18.2.0")
-
     // Coil for image loading in Compose
     implementation("io.coil-kt:coil-compose:2.4.0")
 
     // Landscapist Glide for image loading in Compose
     implementation("com.github.skydoves:landscapist-glide:2.2.6")
+
+    // On-device OCR for auto-filling inscription from photos
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 }
