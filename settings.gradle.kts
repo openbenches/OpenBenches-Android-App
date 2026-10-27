@@ -15,4 +15,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Open Benches"
 include(":app")
+include(":ppocr-sdk")
  

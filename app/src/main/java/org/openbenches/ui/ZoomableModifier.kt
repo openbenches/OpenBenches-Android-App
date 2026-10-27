@@ -1,17 +1,17 @@
 package org.openbenches.ui
 
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.composed
 
 /**
  * Adds pinch-to-zoom and pan support to a composable.
@@ -32,7 +32,7 @@ fun Modifier.zoomable(): Modifier = composed {
                 val newOffset = offset + pan
                 offset = Offset(
                     x = newOffset.x.coerceIn(-maxX, maxX),
-                    y = newOffset.y.coerceIn(-maxY, maxY)
+                    y = newOffset.y.coerceIn(-maxY, maxY),
                 )
             }
         }
@@ -42,4 +42,4 @@ fun Modifier.zoomable(): Modifier = composed {
             scaleX = scale
             scaleY = scale
         }
-} 
+}

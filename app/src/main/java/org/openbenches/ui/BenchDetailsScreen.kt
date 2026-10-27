@@ -6,23 +6,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
+import org.openbenches.ui.theme.OpenBenchesTopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import org.openbenches.R
@@ -31,78 +32,115 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import org.openbenches.data.fetchBenchDetails
 import org.openbenches.data.BenchDetailsFeature
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.draw.clip
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.skydoves.landscapist.glide.GlideImage
-import org.openbenches.ui.zoomable
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.OffsetMapping
-import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.border
 import androidx.core.text.HtmlCompat
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.time.ZoneId
-import java.time.ZonedDateTime
 import java.time.format.DateTimeParseException
 import java.util.Locale
 import androidx.compose.foundation.layout.height
-import org.openbenches.data.fetchAddressFromLatLng
 import androidx.compose.ui.viewinterop.AndroidView
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.CustomZoomButtonsController
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.MutableState
+import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
+import java.time.ZonedDateTime
+import org.openbenches.util.saveBenchPhotoToGallery
 
 /**
  * Screen displaying details for a bench.
  * Shows a back button at the top left.
  * @param benchId The ID of the bench to show details for
  * @param onBack Callback when the back button is pressed
+ * @param authToken When non-null, shows an Edit action next to Share
+ * @param onEdit Called when the Edit action is pressed (logged-in users only)
+ * @param refreshKey Increment to reload bench details after an edit
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Unit) {
-    rememberCoroutineScope()
+fun BenchDetailsScreen(
+    benchId: Int,
+    onBack: (lat: Double?, lng: Double?) -> Unit,
+    mapProvider: MapProvider = MapProvider.OSM,
+    authToken: String? = null,
+    onEdit: (() -> Unit)? = null,
+    refreshKey: Int = 0,
+) {
+    val context = LocalContext.current
+    val clipboard = remember(context) {
+        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    }
     val loading = remember { mutableStateOf(true) }
     val error = remember { mutableStateOf<String?>(null) }
     val benchDetails = remember { mutableStateOf<BenchDetailsFeature?>(null) }
     val fullscreenImageIndex = remember { mutableStateOf<Int?>(null) }
 
-    LaunchedEffect(benchId) {
+    LaunchedEffect(benchId, refreshKey) {
         loading.value = true
         error.value = null
         try {
+            println("Fetching bench details for ID: $benchId")
             val response = fetchBenchDetails(benchId)
-            benchDetails.value = response.features?.firstOrNull()
+            println("Response received: ${response.features?.size ?: 0} features")
+            if (response.features.isNullOrEmpty()) {
+                error.value = "No bench details found for ID: $benchId"
+            } else {
+                benchDetails.value = response.features.first()
+                println("Bench details loaded successfully")
+            }
         } catch (e: Exception) {
-            error.value = e.message
+            println("Error loading bench details: ${e.message}")
+            e.printStackTrace()
+            error.value = "Failed to load bench details: ${e.message}"
         } finally {
             loading.value = false
         }
@@ -110,7 +148,7 @@ fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Uni
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            OpenBenchesTopAppBar(
                 title = { Text(text = "Details of Bench ID:$benchId") },
                 navigationIcon = {
                     IconButton(onClick = {
@@ -127,15 +165,42 @@ fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Uni
                             contentDescription = stringResource(id = R.string.back_button)
                         )
                     }
+                },
+                actions = {
+                    if (!authToken.isNullOrBlank() && onEdit != null) {
+                        IconButton(onClick = onEdit) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = "Edit bench"
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = {
+                            val url = "https://openbenches.org/bench/$benchId"
+                            clipboard.setPrimaryClip(
+                                ClipData.newPlainText("OpenBenches bench URL", url)
+                            )
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Share,
+                            contentDescription = "Copy bench link"
+                        )
+                    }
                 }
             )
         }
     ) { paddingValues ->
         val scrollState = rememberScrollState()
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+        ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
                 .verticalScroll(scrollState),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -148,321 +213,241 @@ fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Uni
                 }
                 benchDetails.value != null -> {
                     val props = benchDetails.value!!.properties
-                    val benchImages = props?.media
-                        ?.filter { it.url.startsWith("/image/") }
-                        ?: emptyList()
-                    // Images row just below the title
-                    if (benchImages.isNotEmpty()) {
-                        LazyRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(top = 4.dp, bottom = 16.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            itemsIndexed(benchImages) { i, image ->
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    val label = getMediaTypeTitle(image.mediaType)
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    val imageUrl = "https://openbenches.org" + image.url
-                                    AsyncImage(
-                                        model = imageUrl,
-                                        contentDescription = "Bench photo",
-                                        modifier = Modifier
-                                            .size(96.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(Color.White)
-                                            .padding(4.dp)
-                                            .clickable { fullscreenImageIndex.value = i }
-                                    )
-                                    val username = image.username
-                                    if (!username.isNullOrBlank()) {
-                                        Column(
-                                            modifier = Modifier.padding(top = 2.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            Text(
-                                                text = "Photo uploaded by:",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.primary,
-                                            )
-                                            Text(
-                                                text = username,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.primary,
-                                            )
-                                        }
-                                    } else {
-                                        Column(
-                                            modifier = Modifier.padding(top = 2.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            Text(
-                                                text = "Awaiting",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color.Gray,
-                                            )
-                                            Text(
-                                                text = "Photo",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color.Gray,
-                                            )
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                            }
-                        }
-                    } else {
-                        // No images, show 3 placeholders as before
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(top = 4.dp, bottom = 16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            repeat(3) { i ->
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    val label = listOf("plaque", "bench", "view").getOrNull(i)?.let { getMediaTypeTitle(it) } ?: "Photo"
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .size(96.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(Color.White),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.CameraAlt,
-                                            contentDescription = "No photo",
-                                            tint = Color.Gray,
-                                            modifier = Modifier.size(40.dp)
-                                        )
-                                    }
-                                    Column(
-                                        modifier = Modifier.padding(top = 2.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        Text(
-                                            text = "Awaiting",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.Gray,
-                                        )
-                                        Text(
-                                            text = "Photo",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = Color.Gray,
-                                        )
-                                    }
-                                }
-                                if (i < 2) Spacer(modifier = Modifier.width(8.dp))
-                            }
-                        }
-                    }
-                    // Fullscreen image dialog
-                    if (fullscreenImageIndex.value != null && fullscreenImageIndex.value!! < benchImages.size) {
-                        FullscreenImageDialog(
-                            imageUrls = benchImages.map { "https://openbenches.org" + it.url },
-                            currentIndex = fullscreenImageIndex,
-                            onDismiss = { fullscreenImageIndex.value = null }
-                        )
-                    }
-                    // Details below images
-                    val coords = benchDetails.value?.geometry?.coordinates
-                    if (coords != null && coords.size >= 2) {
-                        val lat = coords[1]
-                        val lng = coords[0]
-                        Text(
-                            text = "Bench Location",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 8.dp)
-                        )
-                        AndroidView(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(220.dp)
-                                .padding(horizontal = 16.dp),
-                            factory = { ctx ->
-                                // Configure osmdroid
-                                Configuration.getInstance().load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
-                                
-                                // Set tile cache size for better performance
-                                Configuration.getInstance().tileFileSystemCacheMaxBytes = 20L * 1024L * 1024L // 20MB cache
-                                Configuration.getInstance().tileDownloadThreads = 4 // Download threads
-                                Configuration.getInstance().tileDownloadMaxQueueSize = 50 // Download queue
-                                
-                                val mapView = MapView(ctx)
-                                
-                                // Set tile source to OpenStreetMap
-                                mapView.setTileSource(TileSourceFactory.MAPNIK)
-                                
-                                // Configure map for bench details view
-                                mapView.setMultiTouchControls(true)
-                                mapView.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-                                
-                                // Enable tile preloading for smoother experience
-                                mapView.isTilesScaledToDpi = true
-                                mapView.isHorizontalMapRepetitionEnabled = true
-                                mapView.isVerticalMapRepetitionEnabled = true
-                                
-                                // Enable hardware acceleration for smoother rendering
-                                mapView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-                                
-                                // Set tile overlay options for better performance
-                                mapView.overlayManager.tilesOverlay?.setLoadingBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                mapView.overlayManager.tilesOverlay?.setLoadingLineColor(android.graphics.Color.TRANSPARENT)
-                                
-                                // Set initial position and zoom
-                                val benchLocation = GeoPoint(lat, lng)
-                                mapView.controller.setZoom(16.0) // Closer zoom for bench details
-                                mapView.controller.setCenter(benchLocation)
-                                
-                                // Add bench marker
-                                val marker = Marker(mapView)
-                                marker.position = benchLocation
-                                marker.title = "Bench Location"
-                                marker.subDescription = "Tap to see bench details"
-                                marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                
-                                // Add click listener to show info window
-                                marker.setOnMarkerClickListener { m, _ ->
-                                    if (!m.isInfoWindowShown) {
-                                        m.showInfoWindow()
-                                    }
-                                    true
-                                }
-                                
-                                // Create custom marker icon (optional - you can use default or custom)
-                                try {
-                                    val markerBitmapRaw = android.graphics.BitmapFactory.decodeResource(
-                                        ctx.resources, 
-                                        ctx.resources.getIdentifier("marker", "drawable", ctx.packageName)
-                                    )
-                                    if (markerBitmapRaw != null) {
-                                        val markerBitmap = android.graphics.Bitmap.createScaledBitmap(markerBitmapRaw, 98, 64, true)
-                                        val markerDrawable = android.graphics.drawable.BitmapDrawable(ctx.resources, markerBitmap)
-                                        marker.icon = markerDrawable
-                                    }
-                                } catch (e: Exception) {
-                                    // Use default marker if custom marker fails to load
-                                }
-                                
-                                mapView.overlays.add(marker)
-                                mapView
-                            },
-                            update = { mapView ->
-                                // Update map if needed (e.g., if bench location changes)
-                                val benchLocation = GeoPoint(lat, lng)
-                                mapView.controller.setCenter(benchLocation)
-                                
-                                // Update marker position
-                                mapView.overlays.clear()
-                                val marker = Marker(mapView)
-                                marker.position = benchLocation
-                                marker.title = "Bench Location"
-                                marker.subDescription = "Tap to see bench details"
-                                marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                                
-                                // Add click listener to show info window
-                                marker.setOnMarkerClickListener { m, _ ->
-                                    if (!m.isInfoWindowShown) {
-                                        m.showInfoWindow()
-                                    }
-                                    true
-                                }
-                                
-                                // Recreate marker icon
-                                try {
-                                    val markerBitmapRaw = android.graphics.BitmapFactory.decodeResource(
-                                        mapView.context.resources, 
-                                        mapView.context.resources.getIdentifier("marker", "drawable", mapView.context.packageName)
-                                    )
-                                    if (markerBitmapRaw != null) {
-                                        val markerBitmap = android.graphics.Bitmap.createScaledBitmap(markerBitmapRaw, 98, 64, true)
-                                        val markerDrawable = android.graphics.drawable.BitmapDrawable(mapView.context.resources, markerBitmap)
-                                        marker.icon = markerDrawable
-                                    }
-                                } catch (e: Exception) {
-                                    // Use default marker if custom marker fails to load
-                                }
-                                
-                                mapView.overlays.add(marker)
-                                mapView.invalidate()
-                            }
-                        )
-                        // Centered 'Near:' text
-                        Text(
-                            text = "Near:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 0.dp, bottom = 0.dp)
-                        )
-                        // Fetch and display address below the map
-                        val addressState = remember { mutableStateOf<String?>(null) }
-                        val addressLoading = remember { mutableStateOf(false) }
-                        val addressError = remember { mutableStateOf<String?>(null) }
-                        LaunchedEffect(lat, lng) {
-                            addressLoading.value = true
-                            addressError.value = null
-                            try {
-                                addressState.value = fetchAddressFromLatLng(lat, lng)
-                            } catch (e: Exception) {
-                                addressError.value = "Failed to fetch address"
-                            } finally {
-                                addressLoading.value = false
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        when {
-                            addressLoading.value -> Text("Loading address...", style = MaterialTheme.typography.bodySmall)
-                            addressError.value != null -> Text(addressError.value!!, color = Color.Red, style = MaterialTheme.typography.bodySmall)
-                            !addressState.value.isNullOrBlank() -> Text(addressState.value!!, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 0.dp))
-                        }
-                    }
-                    if (!props?.popupContent.isNullOrBlank()) {
-                        Column(modifier = Modifier.padding(start = 8.dp)) {
-                            Text(
-                                text = "Inscription Details",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
-                            )
-                            val plainText = HtmlCompat.fromHtml(props?.popupContent ?: "", HtmlCompat.FROM_HTML_MODE_LEGACY).toString().replace("\n", " ").trim()
-                            Box(
+                    if (props != null) {
+                        val benchImages = props.media
+                            ?.filter { it.url.isNotEmpty() }
+                            ?: emptyList()
+                        // Images row just below the title
+                        if (benchImages.isNotEmpty()) {
+                            LazyRow(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(end = 8.dp)
-                                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
-                                    .padding(12.dp)
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .padding(top = 4.dp, bottom = 16.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
+                                itemsIndexed(benchImages) { i, image ->
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        val label = getMediaTypeTitle(image.mediaType)
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        val imageUrl = if (image.url.startsWith("http")) {
+                                            image.url
+                                        } else {
+                                            "https://openbenches.org" + image.url
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(144.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color.White)
+                                                .padding(4.dp)
+                                                .clickable {
+                                                    if (i < benchImages.size) {
+                                                        fullscreenImageIndex.value = i
+                                                    }
+                                                }
+                                        ) {
+                                            BenchPhotoImage(
+                                                imageUrl = imageUrl,
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentDescription = "Bench photo"
+                                            )
+                                        }
+                                        val username = image.username
+                                        if (!username.isNullOrBlank()) {
+                                            Column(
+                                                modifier = Modifier.padding(top = 2.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Text(
+                                                    text = "Photo uploaded by:",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                )
+                                                Text(
+                                                    text = username,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                )
+                                            }
+                                        } else {
+                                            Column(
+                                                modifier = Modifier.padding(top = 2.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
+                                            ) {
+                                                Text(
+                                                    text = "Awaiting",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color.Gray,
+                                                )
+                                                Text(
+                                                    text = "Photo",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = Color.Gray,
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                            }
+                        } else {
+                            // No images, show 3 placeholders as before
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .padding(top = 4.dp, bottom = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                repeat(3) { i ->
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        val label = listOf("plaque", "bench", "view").getOrNull(i)?.let { getMediaTypeTitle(it) } ?: "Photo"
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .size(144.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color.Gray.copy(alpha = 0.3f))
+                                                .padding(4.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.CameraAlt,
+                                                contentDescription = "No photo",
+                                                tint = Color.Gray,
+                                                modifier = Modifier.size(48.dp)
+                                            )
+                                        }
+                                    }
+                                    if (i < 2) Spacer(modifier = Modifier.width(8.dp))
+                                }
+                            }
+                        }
+                        // Fullscreen image dialog
+                        if (fullscreenImageIndex.value != null && 
+                            fullscreenImageIndex.value!! >= 0 && 
+                            fullscreenImageIndex.value!! < benchImages.size) {
+                            FullscreenImageDialog(
+                                imageUrls = benchImages.map { 
+                                    if (it.url.startsWith("http")) it.url else "https://openbenches.org" + it.url 
+                                },
+                                imageLabels = benchImages.map { getMediaTypeTitle(it.mediaType) },
+                                currentIndex = fullscreenImageIndex,
+                                benchId = benchId,
+                                onDismiss = { fullscreenImageIndex.value = null }
+                            )
+                        }
+                        // Rest of the content
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            // Description (using popupContent as description)
+                            if (!props.popupContent.isNullOrBlank()) {
+                                val plainText = HtmlCompat.fromHtml(props.popupContent, HtmlCompat.FROM_HTML_MODE_COMPACT).toString()
+                                Surface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(end = 8.dp),
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        3.dp,
+                                        MaterialTheme.colorScheme.outline,
+                                    ),
+                                ) {
+                                    Text(
+                                        text = plainText,
+                                        modifier = Modifier.padding(16.dp),
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        textAlign = TextAlign.Center,
+                                    )
+                                }
+                            }
+                            
+                            // Map showing bench location
+                            val coordinates = benchDetails.value?.geometry?.coordinates
+                            if (coordinates != null && coordinates.size >= 2) {
+                                val benchLat = coordinates[1]
+                                val benchLng = coordinates[0]
+                                
                                 Text(
-                                    text = plainText,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    textAlign = TextAlign.Center
+                                    text = "Bench Location",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
                                 )
+                                
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(300.dp)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                                        .clip(RoundedCornerShape(8.dp))
+                                ) {
+                                    androidx.compose.runtime.key(mapProvider) {
+                                    AndroidView(
+                                        factory = { ctx ->
+                                            // Configure osmdroid
+                                            Configuration.getInstance().load(ctx, ctx.getSharedPreferences("osmdroid", Context.MODE_PRIVATE))
+                                            
+                                            val mapView = MapView(ctx)
+                                            
+                                            mapView.setTileSource(MapTileSources.tileSourceFor(mapProvider))
+                                            
+                                            // Configure map
+                                            mapView.setMultiTouchControls(true)
+                                            mapView.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+                                            mapView.isTilesScaledToDpi = true
+                                            
+                                            // Set center and zoom to bench location
+                                            val benchPoint = GeoPoint(benchLat, benchLng)
+                                            mapView.controller.setZoom(18.0) // Close zoom to show bench clearly
+                                            mapView.controller.setCenter(benchPoint)
+                                            
+                                            // Add bench marker
+                                            val marker = Marker(mapView)
+                                            marker.position = benchPoint
+                                            marker.title = "Bench #$benchId"
+                                            marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                            
+                                            // Load marker icon
+                                            try {
+                                                val markerBitmapRaw = BitmapFactory.decodeResource(ctx.resources, ctx.resources.getIdentifier("marker", "drawable", ctx.packageName))
+                                                if (markerBitmapRaw != null) {
+                                                    val markerBitmap = Bitmap.createScaledBitmap(markerBitmapRaw, 98, 64, true)
+                                                    val markerDrawable = BitmapDrawable(ctx.resources, markerBitmap)
+                                                    marker.icon = markerDrawable
+                                                }
+                                            } catch (e: Exception) {
+                                                // Use default marker if custom marker fails to load
+                                            }
+                                            
+                                            mapView.overlays.add(marker)
+                                            
+                                            mapView
+                                        },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    }
+                                }
                             }
                             if (!props.createdAt.isNullOrBlank()) {
-                                val input = props.createdAt ?: ""
+                                val input = props.createdAt
                                 val formattedDate = try {
                                     // Try parsing ISO 8601 with or without time zone
                                     val zoned = try {
@@ -475,7 +460,7 @@ fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Uni
                                     } catch (e: Exception) {
                                         null
                                     }
-                                    val date = zoned?.toLocalDate() ?: local?.toLocalDate() ?: null
+                                    val date = zoned?.toLocalDate() ?: local?.toLocalDate()
                                     date?.format(DateTimeFormatter.ofPattern("yyyy MMMM dd", Locale.getDefault())) ?: input
                                 } catch (e: DateTimeParseException) {
                                     input
@@ -491,6 +476,10 @@ fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Uni
                                 )
                             }
                         }
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("No details found.", style = MaterialTheme.typography.bodyLarge)
+                        }
                     }
                 }
                 else -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -498,23 +487,123 @@ fun BenchDetailsScreen(benchId: Int, onBack: (lat: Double?, lng: Double?) -> Uni
                 }
             }
         }
+
+        }
     }
 }
 
 /**
- * Dialog for displaying a fullscreen image with navigation arrows.
+ * Dialog for displaying a fullscreen image with swipe and arrow navigation.
  *
  * @param imageUrls List of image URLs to display
  * @param currentIndex MutableState of the currently displayed image index
  * @param onDismiss Callback when the dialog is dismissed
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FullscreenImageDialog(
     imageUrls: List<String>,
+    imageLabels: List<String>,
     currentIndex: MutableState<Int?>,
+    benchId: Int,
     onDismiss: () -> Unit
 ) {
-    val index = currentIndex.value ?: return
+    val startIndex = currentIndex.value ?: return
+    if (startIndex !in imageUrls.indices) {
+        onDismiss()
+        return
+    }
+
+    val context = LocalContext.current
+    val pagerState = rememberPagerState(
+        initialPage = startIndex,
+        pageCount = { imageUrls.size },
+    )
+    val configuration = LocalConfiguration.current
+    val bannerTopPadding = if (
+        configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    ) {
+        8.dp
+    } else {
+        56.dp
+    }
+    val photoLabelBottomPadding = if (
+        configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    ) {
+        24.dp
+    } else {
+        128.dp
+    }
+    val coroutineScope = rememberCoroutineScope()
+    val page = pagerState.currentPage
+    val zoomState = rememberFullscreenZoomState()
+    var isDownloading by remember { mutableStateOf(false) }
+
+    fun runDownload() {
+        val url = imageUrls.getOrNull(pagerState.currentPage) ?: return
+        if (isDownloading) return
+        isDownloading = true
+        coroutineScope.launch {
+            val fileName = "openbenches-bench-${benchId}-photo-${pagerState.currentPage + 1}.jpg"
+            val result = saveBenchPhotoToGallery(context, url, fileName)
+            isDownloading = false
+            Toast.makeText(
+                context,
+                if (result.isSuccess) {
+                    "Photo saved to Pictures/OpenBenches"
+                } else {
+                    result.exceptionOrNull()?.message ?: "Could not download photo"
+                },
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            runDownload()
+        } else {
+            Toast.makeText(
+                context,
+                "Storage permission is required to save photos",
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
+
+    fun onDownloadClick() {
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE,
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                return
+            }
+        }
+        runDownload()
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        zoomState.reset()
+    }
+
+    LaunchedEffect(pagerState.currentPage) {
+        if (currentIndex.value != pagerState.currentPage) {
+            currentIndex.value = pagerState.currentPage
+        }
+    }
+
+    LaunchedEffect(currentIndex.value) {
+        val target = currentIndex.value ?: return@LaunchedEffect
+        if (target in imageUrls.indices && target != pagerState.currentPage) {
+            pagerState.scrollToPage(target)
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -522,21 +611,56 @@ private fun FullscreenImageDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black),
+                .background(Color.Black)
+                .fullscreenDoubleTapZoom(zoomState),
             contentAlignment = Alignment.Center
         ) {
-            // Fullscreen image (background)
-            AsyncImage(
-                model = imageUrls[index],
-                contentDescription = "Full screen bench photo",
+            HorizontalPager(
+                state = pagerState,
+                userScrollEnabled = false,
                 modifier = Modifier
                     .fillMaxSize()
-                    .zoomable(),
-            )
+                    .fullscreenPagerSwipe(pagerState, coroutineScope, zoomState),
+            ) { pagerPage ->
+                BenchPhotoImage(
+                    imageUrl = imageUrls[pagerPage],
+                    contentDescription = "Full screen bench photo",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .fullscreenZoomGraphics(zoomState)
+                        .fullscreenPhotoGestures(zoomState),
+                    spinnerSize = 48.dp
+                )
+            }
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .padding(bottom = photoLabelBottomPadding)
+                    .zIndex(3f),
+                color = Color.White.copy(alpha = 0.92f),
+                contentColor = Color.Black,
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = Color.Black.copy(alpha = 0.35f),
+                ),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text(
+                    text = imageLabels.getOrNull(page) ?: "Photo",
+                    style = MaterialTheme.typography.labelLarge,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
+            }
             // Left arrow
-            if (index > 0) {
+            if (page > 0) {
                 IconButton(
-                    onClick = { currentIndex.value = index - 1 },
+                    onClick = {
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(page - 1)
+                        }
+                    },
                     modifier = Modifier.align(Alignment.CenterStart)
                 ) {
                     Icon(
@@ -548,9 +672,13 @@ private fun FullscreenImageDialog(
                 }
             }
             // Right arrow
-            if (index < imageUrls.size - 1) {
+            if (page < imageUrls.size - 1) {
                 IconButton(
-                    onClick = { currentIndex.value = index + 1 },
+                    onClick = {
+                        coroutineScope.launch {
+                            pagerState.animateScrollToPage(page + 1)
+                        }
+                    },
                     modifier = Modifier.align(Alignment.CenterEnd)
                 ) {
                     Icon(
@@ -561,20 +689,99 @@ private fun FullscreenImageDialog(
                     )
                 }
             }
-            // Close button
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier.align(Alignment.TopEnd)
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(top = 4.dp, end = 4.dp)
+                    .zIndex(4f),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Close,
-                    contentDescription = "Close",
-                    tint = Color.White,
-                    modifier = Modifier.size(32.dp)
-                )
+                IconButton(
+                    onClick = { onDownloadClick() },
+                    enabled = !isDownloading,
+                ) {
+                    if (isDownloading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(28.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.Download,
+                            contentDescription = "Download photo",
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close",
+                        tint = Color.White,
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
+            }
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = bannerTopPadding),
+                color = Color.White.copy(alpha = 0.92f),
+                contentColor = Color.Black,
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = Color.Black.copy(alpha = 0.35f),
+                ),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        text = "Double-tap to zoom in/out",
+                        style = MaterialTheme.typography.labelLarge,
+                        textAlign = TextAlign.Center,
+                    )
+                    Text(
+                        text = "Swipe or use arrows to browse through photos",
+                        style = MaterialTheme.typography.labelMedium,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         }
     }
+}
+
+@Composable
+private fun BenchPhotoImage(
+    imageUrl: String,
+    modifier: Modifier = Modifier,
+    contentDescription: String = "Bench photo",
+    spinnerSize: Dp = 32.dp,
+) {
+    SubcomposeAsyncImage(
+        model = imageUrl,
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+        loading = {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(spinnerSize),
+                    strokeWidth = 2.dp
+                )
+            }
+        }
+    )
 }
 
 // Helper function to map mediaType to user-friendly title
@@ -590,4 +797,4 @@ private fun getMediaTypeTitle(mediaType: String?): String = when (mediaType?.low
 @Composable
 fun BenchDetailsScreenPreview() {
     BenchDetailsScreen(benchId = 1, onBack = { _, _ -> })
-} 
+}

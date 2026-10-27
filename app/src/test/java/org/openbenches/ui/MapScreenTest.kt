@@ -10,8 +10,11 @@ class MapScreenTest {
     
     @Test
     fun testMapProviderEnum() {
-        // Test that all map providers are available
-        assertEquals(1, MapProvider.values().size)
+        assertEquals(2, MapProvider.values().size)
         assertTrue("OSM should be available", MapProvider.values().contains(MapProvider.OSM))
+        assertTrue(
+            "Esri satellite should be available",
+            MapProvider.values().contains(MapProvider.ESRI_SATELLITE),
+        )
     }
 } 

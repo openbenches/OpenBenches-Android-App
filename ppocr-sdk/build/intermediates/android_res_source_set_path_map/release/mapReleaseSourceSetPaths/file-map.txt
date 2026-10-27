@@ -1,0 +1,9 @@
+com.paddle.ocr.ppocr-sdk-pngs-0 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/build/generated/res/pngs/release
+com.paddle.ocr.ppocr-sdk-updated_navigation_xml-1 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/build/generated/updated_navigation_xml/release
+com.paddle.ocr.ppocr-sdk-mergeReleaseResources-2 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/build/intermediates/incremental/release/mergeReleaseResources/merged.dir
+com.paddle.ocr.ppocr-sdk-mergeReleaseResources-3 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/build/intermediates/incremental/release/mergeReleaseResources/stripped.dir
+com.paddle.ocr.ppocr-sdk-release-4 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/build/intermediates/merged_res/release/mergeReleaseResources
+com.paddle.ocr.ppocr-sdk-release-5 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/build/intermediates/packaged_res/release/packageReleaseResources
+com.paddle.ocr.ppocr-sdk-main-6 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/src/main/res
+com.paddle.ocr.ppocr-sdk-release-7 /home/simon/AndroidStudioProjects/OpenBenches/ppocr-sdk/src/release/res
+gradleHome-0 /home/simon/.gradle

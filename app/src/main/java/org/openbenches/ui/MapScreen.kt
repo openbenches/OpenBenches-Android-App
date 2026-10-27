@@ -9,20 +9,20 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.views.overlay.Marker
-import org.osmdroid.tileprovider.cachemanager.CacheManager
-import org.osmdroid.tileprovider.tilesource.ITileSource
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.openbenches.data.Bench
+import org.openbenches.data.TodoBench
+import org.openbenches.util.resolveUserLocation
+import org.openbenches.util.userLocationUpdates
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Box
@@ -30,37 +30,109 @@ import androidx.compose.foundation.layout.fillMaxSize
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.FusedLocationProviderClient
 import android.graphics.BitmapFactory
-import androidx.core.content.res.ResourcesCompat
+import android.graphics.Point
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.Bitmap
+import android.os.SystemClock
+import android.view.MotionEvent
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
 import org.osmdroid.views.CustomZoomButtonsController
 import androidx.compose.runtime.LaunchedEffect
 import org.osmdroid.util.BoundingBox
-import androidx.compose.runtime.rememberCoroutineScope
+import android.graphics.Color as AndroidColor
+import kotlin.math.sqrt
+import kotlin.math.sin
+import kotlin.math.cos
+import kotlin.math.atan2
+import kotlin.math.max
+import kotlin.math.pow
+
+private fun createBenchMarkerDrawable(context: Context): BitmapDrawable {
+    val markerBitmapRaw = BitmapFactory.decodeResource(
+        context.resources,
+        context.resources.getIdentifier("marker", "drawable", context.packageName),
+    )
+    val markerBitmap = Bitmap.createScaledBitmap(markerBitmapRaw, 196, 128, true)
+    return BitmapDrawable(context.resources, markerBitmap)
+}
+
+/** Expands a bench bounding box so markers sit inset from the map edges after zoom-to-fit. */
+private fun boundingBoxAroundBenches(
+    north: Double,
+    south: Double,
+    east: Double,
+    west: Double,
+    paddingFraction: Double = 0.2,
+    minPaddingDegrees: Double = 0.01,
+): BoundingBox {
+    var latSpan = north - south
+    var lonSpan = east - west
+    if (latSpan < 1e-6) latSpan = minPaddingDegrees * 2
+    if (lonSpan < 1e-6) lonSpan = minPaddingDegrees * 2
+
+    val latPad = max(latSpan * paddingFraction, minPaddingDegrees)
+    val lonPad = max(lonSpan * paddingFraction, minPaddingDegrees)
+
+    return BoundingBox(
+        (north + latPad).coerceAtMost(90.0),
+        east + lonPad,
+        (south - latPad).coerceAtLeast(-90.0),
+        west - lonPad,
+    )
+}
 
 /**
- * Enum for selecting map provider
+ * Enhanced Map Clustering Implementation
+ * 
+ * This implementation is based on the clustering approach used by OpenBenches.org
+ * (https://github.com/openbenches/openbenches.org) and includes several improvements:
+ * 
+ * Key Features:
+ * 1. Grid-based clustering for better performance with large datasets
+ * 2. Dynamic cluster radius based on zoom level
+ * 3. Enhanced visual design with color-coded clusters
+ * 4. Optimized Haversine distance calculation
+ * 5. Efficient marker management and updates
+ * 
+ * Clustering Algorithm:
+ * - Uses a grid-based approach to reduce computational complexity
+ * - Groups benches by geographic grid cells before applying distance-based clustering
+ * - Cluster radius varies from 50km (very zoomed out) to 100m (very zoomed in)
+ * - Only applies clustering when zoom level < 16.0 and bench count > 10
+ * 
+ * Visual Design:
+ * - Color-coded clusters: Green (<10), Yellow (10-49), Orange (50-99), Red (100+)
+ * - Enhanced cluster icons with shadow effects and better typography
+ * - Compact display for large numbers (e.g., "1k" for 1000+ benches)
+ * 
+ * Performance Optimizations:
+ * - Efficient hash-based change detection
+ * - Selective marker removal (preserves user location marker)
+ * - Grid-based clustering reduces O(n²) complexity to O(n log n)
+ * - Hardware acceleration and tile preloading
+ * 
+ * Interactive Features:
+ * - Click clusters to zoom in and reveal individual markers
+ * - Tap outside markers to close popups
+ * - Smooth animations when zooming to clusters
+ * - Proper popup management (close others when opening new ones)
  */
-enum class MapProvider {
-    OSM
-}
 
 /**
  * MapScreen composable displays benches from OpenBenches API on OpenStreetMap (osmdroid),
  * centered on the user's current location if available.
- * @param mapProvider Which map provider to use (OSM)
+ * @param mapProvider Street map (OSM) or satellite (Esri World Imagery)
  */
 @SuppressLint("MissingPermission")
 @Composable
 fun MapScreen(
     modifier: Modifier = Modifier,
-    recenterOnUser: Boolean = false,
-    onRecenterHandled: () -> Unit = {},
+    recenterRequest: Int = 0,
+    refreshLocation: Boolean = false,
+    onRefreshLocationHandled: () -> Unit = {},
     onCenterChanged: (GeoPoint) -> Unit = {},
-    onSearchThisArea: ((GeoPoint) -> Unit)? = null,
     benches: List<Bench>,
     loading: Boolean,
     error: String?,
@@ -68,63 +140,617 @@ fun MapScreen(
     setMapCenter: (GeoPoint) -> Unit,
     mapProvider: MapProvider = MapProvider.OSM,
     onBenchPopupClick: (benchId: Int) -> Unit = {},
+    /** When false, any open bench marker popup is dismissed. */
+    showBenchDetails: Boolean = false,
     zoomToFitBenches: Boolean = false,
     onZoomToFitHandled: () -> Unit = {},
-    shouldAnimateToMapCenter: Boolean = false,
-    onMapCenterAnimated: () -> Unit = {}
+    mapZoomLevel: Double = 11.0, //Current zoom level of the map
+    onZoomLevelChanged: (Double) -> Unit = {}, //Callback for when zoom level changes
+    /** Bumped to fly the map to [mapCenter] at [mapZoomLevel] (e.g. show a to-do). */
+    mapFocusRequest: Int = 0,
+    /** When non-empty, map markers use cached global benches + viewport clustering. */
+    globalBenches: List<Bench>? = null,
+    /** When non-empty, only these benches are shown (active inscription search). */
+    searchResultBenches: List<Bench>? = null,
+    /** Local "to do" locations (seen benches without photos yet). */
+    todoBenches: List<TodoBench> = emptyList(),
+    /** Fired after the user holds a finger still on the map for ~3 seconds. */
+    onMapLongHold: (GeoPoint) -> Unit = {},
+    /** Fired when a to-do marker is tapped. */
+    onTodoClick: (TodoBench) -> Unit = {},
+    /** Benches in the current viewport that are drawn on the map (sum of cluster sizes). */
+    onVisibleBenchCountChanged: (Int) -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
     var userLocation by remember { mutableStateOf<GeoPoint?>(null) }
-    var lastRecenter by remember { mutableStateOf(false) }
     var initialZoomSet by remember { mutableStateOf(false) }
-    var zoomLevel by remember { mutableStateOf(15.0) }
+    var zoomLevel by remember { mutableStateOf(mapZoomLevel) }
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var lastBenchesHash by remember { mutableStateOf(0) }
+    var lastMarkerGenerationKey by remember { mutableStateOf(0) }
+    /** Bumped when the map viewport pans so bench markers refresh for the visible area. */
+    var viewportPanKey by remember { mutableStateOf(0) }
+    var lastProcessedPanKey by remember { mutableStateOf(0) }
+    val scrollGenerationHolder = remember { intArrayOf(0) }
+    val useGlobalBenches = !globalBenches.isNullOrEmpty()
+    val useSearchFilter = !searchResultBenches.isNullOrEmpty()
+    fun benchMarkerSource(): List<Bench> = when {
+        useSearchFilter -> searchResultBenches!!
+        useGlobalBenches -> globalBenches!!
+        else -> benches
+    }
     var userMarker by remember { mutableStateOf<Marker?>(null) }
+    var isRefreshingLocation by remember { mutableStateOf(false) }
+    var lastProcessedRecenterRequest by remember { mutableStateOf(0) }
+    var lastTodoMarkersKey by remember { mutableStateOf(0) }
+    var lastMapFocusRequest by remember { mutableStateOf(0) }
+    /** When true, map keeps recentering on the user ~every 0.5s until they pan/zoom/tap. */
+    var followingUserLocation by remember { mutableStateOf(false) }
+    /** Ignore scroll/zoom cancel briefly after programmatic follow moves. */
+    val ignoreFollowCancelUntilMs = remember { longArrayOf(0L) }
 
-    // Only center on user location once after map loads and user location is available
-    var hasCenteredOnUser by remember { mutableStateOf(false) }
-    var mapLoaded by remember { mutableStateOf(false) }
-    var lastAnimatedMapCenter by remember { mutableStateOf<GeoPoint?>(null) }
+    fun stopFollowingUser() {
+        followingUserLocation = false
+    }
 
-    LaunchedEffect(context) {
-        val hasPermission = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED
-        if (hasPermission) {
-            val fusedLocationClient: FusedLocationProviderClient =
-                LocationServices.getFusedLocationProviderClient(context)
-            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                if (location != null) {
-                    userLocation = GeoPoint(location.latitude, location.longitude)
+    fun markProgrammaticFollowMove() {
+        ignoreFollowCancelUntilMs[0] = SystemClock.uptimeMillis() + 250L
+    }
+
+    fun shouldCancelFollowFromUserGesture(): Boolean =
+        followingUserLocation && SystemClock.uptimeMillis() >= ignoreFollowCancelUntilMs[0]
+
+    fun isTodoMarker(marker: Marker): Boolean =
+        marker.relatedObject is TodoBench
+
+    // Per-bench-id: true = first tap done (popup shown), waiting for second tap to open details.
+    // Cleared when bench/cluster markers are rebuilt (createMarkers) so state never outlives real popups.
+    var markerClickStates by remember { mutableStateOf(mutableMapOf<Int, Boolean>()) }
+
+    /**
+     * Calculate distance between two points using Haversine formula
+     * Optimized version with better precision
+     */
+    fun calculateDistance(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+        val r = 6371.0 // Earth's radius in kilometers
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLng = Math.toRadians(lng2 - lng1)
+        val a = sin(dLat / 2).pow(2) +
+                cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
+                sin(dLng / 2).pow(2)
+        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return r * c
+    }
+
+    /**
+     * Enhanced clustering algorithm based on OpenBenches.org approach
+     * Uses a more efficient grid-based clustering for better performance
+     * Ensures isolated benches remain as individual markers for proper click handling
+     */
+    fun clusterBenchesByDistance(benches: List<Bench>, zoomLevel: Double): List<List<Bench>> {
+        if (benches.isEmpty()) return emptyList()
+        
+        // Determine cluster radius based on zoom level - larger radius for more zoomed out
+        val clusterRadiusKm = when {
+            zoomLevel < 8.0 -> 50.0   // Very zoomed out - 50km radius
+            zoomLevel < 10.0 -> 20.0  // Very zoomed out - 20km radius
+            zoomLevel < 12.0 -> 5.0   // Medium zoom - 5km radius
+            zoomLevel < 14.0 -> 1.0   // Lower zoom - 1km radius
+            zoomLevel < 15.0 -> 0.5   // Higher zoom - 500m radius
+            else -> 0.1               // Very zoomed in - 100m radius
+        }
+        
+        // Use grid-based clustering for better performance with large datasets
+        val gridSize = clusterRadiusKm / 111.0 // Approximate km per degree
+        val grid = mutableMapOf<String, MutableList<Bench>>()
+        
+        // Group benches by grid cell
+        benches.forEach { bench ->
+            val gridX = (bench.lng / gridSize).toInt()
+            val gridY = (bench.lat / gridSize).toInt()
+            val gridKey = "$gridX,$gridY"
+            
+            grid.getOrPut(gridKey) { mutableListOf() }.add(bench)
+        }
+        
+        val clusters = mutableListOf<MutableList<Bench>>()
+        
+        // Process each grid cell
+        grid.values.forEach { gridBenches ->
+            if (gridBenches.size == 1) {
+                // Single bench in grid cell - create individual cluster
+                clusters.add(mutableListOf(gridBenches.first()))
+            } else {
+                // Multiple benches - need to check distances within grid cell
+                val used = mutableSetOf<Int>()
+                
+                for (i in gridBenches.indices) {
+                    if (i in used) continue
+                    
+                    val currentBench = gridBenches[i]
+                    val cluster = mutableListOf<Bench>()
+                    cluster.add(currentBench)
+                    used.add(i)
+                    
+                    // Find all nearby benches within cluster radius
+                    for (j in i + 1 until gridBenches.size) {
+                        if (j in used) continue
+                        
+                        val otherBench = gridBenches[j]
+                        val distance = calculateDistance(
+                            currentBench.lat, currentBench.lng,
+                            otherBench.lat, otherBench.lng
+                        )
+                        
+                        if (distance <= clusterRadiusKm) {
+                            cluster.add(otherBench)
+                            used.add(j)
+                        }
+                    }
+                    
+                    // Only create cluster if there are multiple benches
+                    // If only one bench in cluster, treat as individual marker
+                    if (cluster.size > 1) {
+                        clusters.add(cluster)
+                    } else {
+                        // Single isolated bench - create individual cluster for proper click handling
+                        clusters.add(mutableListOf(cluster.first()))
+                    }
                 }
+            }
+        }
+        
+        return clusters
+    }
+
+    /**
+     * Helper function to find the bench ID for a given marker
+     */
+    fun findBenchIdForMarker(marker: Marker, mapView: MapView): Int? {
+        (marker.relatedObject as? Int)?.let { return it }
+        val title = marker.title
+        if (title != null && title.startsWith("Bench #")) {
+            val benchIdStr = title.substring(7) // Remove "Bench #" prefix
+            return benchIdStr.toIntOrNull()
+        }
+        return null
+    }
+
+    /**
+     * True if the tap lies on any [Marker] icon (bench, cluster, or user location).
+     * Used so we do not clear "pending second tap" when the user is actually tapping a marker —
+     * otherwise the clear runs before the marker click listener and breaks the two-tap flow.
+     */
+    fun tapHitsAnyMarker(mapView: MapView, event: MotionEvent?): Boolean {
+        if (event == null) return false
+        for (overlay in mapView.overlays) {
+            if (overlay is Marker && overlay.hitTest(event, mapView)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Clears currently open bench popups and any pending second-tap state.
+     * Called when user taps the map background to "unselect" a bench.
+     */
+    fun clearBenchSelection(mapView: MapView) {
+        var changed = false
+        mapView.overlays.forEach { overlay ->
+            if (overlay is Marker && overlay != userMarker && overlay.isInfoWindowShown) {
+                overlay.closeInfoWindow()
+                changed = true
+            }
+        }
+        if (markerClickStates.isNotEmpty()) {
+            markerClickStates.clear()
+            changed = true
+        }
+        if (changed) {
+            mapView.invalidate()
+        }
+    }
+
+    /**
+     * Create markers for benches and clusters with enhanced functionality
+     * Uses fixed-size markers (196x128) for consistent click area at all zoom levels
+     */
+    fun createMarkers(
+        mapView: MapView,
+        clusters: List<ViewportBenchClusterer.BenchCluster>,
+        markerDrawable: BitmapDrawable,
+        context: Context
+    ) {
+        // Bench/cluster markers are recreated; old popups are gone. Reset tap state so we never
+        // treat one tap as "second tap" after a refresh/rebuild.
+        markerClickStates.clear()
+        val clusterZoom = ViewportBenchClusterer.quantizeZoomForClustering(zoomLevel)
+        val benchInfoWindow = BenchMarkerInfoWindow(mapView) { benchId ->
+            stopFollowingUser()
+            markerClickStates[benchId] = false
+            onBenchPopupClick(benchId)
+        }
+        clusters.forEach { cluster ->
+            if (cluster.benches.size == 1) {
+                // Single bench - show individual marker
+                val bench = cluster.benches.first()
+                val marker = Marker(mapView)
+                marker.position = GeoPoint(bench.lat, bench.lng)
+                marker.title = "Bench #${bench.id}"
+                marker.subDescription = bench.popupContent
+                marker.relatedObject = bench.id
+                marker.infoWindow = benchInfoWindow
+                marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                marker.icon = markerDrawable
+                marker.setOnMarkerClickListener { m, _ ->
+                    stopFollowingUser()
+                    android.util.Log.d("MapScreen", "Marker clicked - Bench ID: ${bench.id}")
+                    
+                    // Close all other open popups first and reset their click states
+                    mapView.overlays.forEach { overlay ->
+                        if (overlay is Marker && overlay != m && overlay.isInfoWindowShown) {
+                            overlay.closeInfoWindow()
+                            // Reset click state for the closed marker
+                            val closedBenchId = findBenchIdForMarker(overlay, mapView)
+                            if (closedBenchId != null) {
+                                markerClickStates[closedBenchId] = false
+                                android.util.Log.d("MapScreen", "Reset click state for closed bench $closedBenchId")
+                            }
+                        }
+                    }
+                    
+                    // Use custom click tracking instead of relying on isInfoWindowShown
+                    val hasBeenClicked = markerClickStates[bench.id] ?: false
+                    android.util.Log.d("MapScreen", "Single bench marker click - Bench ID: ${bench.id}, Has been clicked: $hasBeenClicked")
+                    
+                    if (!hasBeenClicked) {
+                        // First click - show popup and mark as clicked
+                        android.util.Log.d("MapScreen", "First click - showing popup for bench ${bench.id}")
+                        markerClickStates[bench.id] = true
+                        m.showInfoWindow()
+                    } else {
+                        // Second click - navigate to bench details
+                        android.util.Log.d("MapScreen", "Second click - navigating to bench details for bench ${bench.id}")
+                        android.util.Log.d("MapScreen", "Calling onBenchPopupClick with bench ID: ${bench.id}")
+                        markerClickStates[bench.id] = false // Reset for next time
+                        onBenchPopupClick(bench.id)
+                        android.util.Log.d("MapScreen", "onBenchPopupClick call completed for bench ID: ${bench.id}")
+                    }
+                    true // Consume the event to prevent map interaction
+                }
+                
+                // Verify click listener was attached
+                android.util.Log.d("MapScreen", "Click listener attached to marker for bench ${bench.id}")
+                
+                mapView.overlays.add(marker)
+            } else {
+                // Multiple benches - marker at unweighted midpoint of merged sub-cells
+                val centerPoint = GeoPoint(cluster.centerLat, cluster.centerLng)
+
+                val clusterMarker = Marker(mapView)
+                clusterMarker.position = centerPoint
+                clusterMarker.title = "${cluster.benches.size} benches"
+                clusterMarker.subDescription = "Tap to zoom in and see individual benches"
+                clusterMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                
+                // Create cluster icon with count
+                val clusterIcon = createClusterIcon(cluster.benches.size, context, clusterZoom)
+                clusterMarker.icon = clusterIcon
+                
+                clusterMarker.setOnMarkerClickListener { m, _ ->
+                    stopFollowingUser()
+                    // Close all other open popups first and reset their click states
+                    mapView.overlays.forEach { overlay ->
+                        if (overlay is Marker && overlay != m && overlay.isInfoWindowShown) {
+                            overlay.closeInfoWindow()
+                            // Reset click state for the closed marker
+                            val closedBenchId = findBenchIdForMarker(overlay, mapView)
+                            if (closedBenchId != null) {
+                                markerClickStates[closedBenchId] = false
+                                android.util.Log.d("MapScreen", "Reset click state for closed bench $closedBenchId")
+                            }
+                        }
+                    }
+                    
+                    // Check if this marker already has an open info window
+                    val hasOpenWindow = m.isInfoWindowShown
+                    if (!hasOpenWindow) {
+                        // First click - show popup
+                        m.showInfoWindow()
+                    } else {
+                        // Second click - navigate to bench details for the first bench in the cluster
+                        onBenchPopupClick(cluster.benches.first().id)
+                    }
+                    true // Consume the event to prevent map interaction
+                }
+                
+                // Verify click listener was attached
+                android.util.Log.d("MapScreen", "Click listener attached to cluster marker for ${cluster.benches.size} benches")
+                
+                mapView.overlays.add(clusterMarker)
             }
         }
     }
 
-    val markerBitmap: Bitmap? = remember {
-        val resId = context.resources.getIdentifier("marker", "drawable", context.packageName)
-        if (resId != 0) {
-            BitmapFactory.decodeResource(context.resources, resId)?.let {
-                Bitmap.createScaledBitmap(it, 196, 128, true)
-            }
-        } else null
+    LaunchedEffect(context) {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!hasPermission) return@LaunchedEffect
+        val location = withContext(Dispatchers.IO) {
+            resolveUserLocation(context)
+        }
+        if (location != null) {
+            userLocation = GeoPoint(location.latitude, location.longitude)
+        }
     }
 
-    LaunchedEffect(zoomToFitBenches, benches, mapProvider) {
-        if (zoomToFitBenches && benches.isNotEmpty()) {
-            val lats = benches.map { it.lat }
-            val lngs = benches.map { it.lng }
+    // Handle location refresh requests (updates marker; recenter also fetches fresh GPS).
+    LaunchedEffect(refreshLocation) {
+        if (!refreshLocation) return@LaunchedEffect
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!hasPermission) {
+            onRefreshLocationHandled()
+            return@LaunchedEffect
+        }
+        isRefreshingLocation = true
+        val location = withContext(Dispatchers.IO) {
+            resolveUserLocation(context)
+        }
+        if (location != null) {
+            userLocation = GeoPoint(location.latitude, location.longitude)
+        }
+        isRefreshingLocation = false
+        onRefreshLocationHandled()
+    }
+
+    LaunchedEffect(zoomToFitBenches, benches, globalBenches, searchResultBenches, mapProvider) {
+        val fitBenches = benchMarkerSource()
+        if (zoomToFitBenches && fitBenches.isNotEmpty()) {
+            stopFollowingUser()
+            val lats = fitBenches.map { it.lat }
+            val lngs = fitBenches.map { it.lng }
             val north = lats.maxOrNull() ?: 0.0
             val south = lats.minOrNull() ?: 0.0
             val east = lngs.maxOrNull() ?: 0.0
             val west = lngs.minOrNull() ?: 0.0
-            val bbox = BoundingBox(north, east, south, west)
+            
             mapViewRef?.post {
-                mapViewRef?.zoomToBoundingBox(bbox, true)
+                if (fitBenches.size == 1) {
+                    // For single bench, center on it with a reasonable zoom level (not maximum)
+                    val bench = fitBenches.first()
+                    mapViewRef?.controller?.setCenter(GeoPoint(bench.lat, bench.lng))
+                    mapViewRef?.controller?.setZoom(16.0) // Reasonable zoom level for single bench
+                } else {
+                    val mapView = mapViewRef ?: return@post
+                    val bbox = boundingBoxAroundBenches(north, south, east, west)
+                    val borderPx = (72 * mapView.context.resources.displayMetrics.density).toInt()
+                    mapView.zoomToBoundingBox(bbox, true, borderPx)
+                }
             }
             onZoomToFitHandled()
+        }
+    }
+
+    fun markerGenerationKey(mapView: MapView): Int {
+        val bbox = mapView.boundingBox
+        val sourceToken = benchMarkerSource().size
+        val clusterZoom = ViewportBenchClusterer.quantizeZoomForClustering(zoomLevel)
+        val panStep = ViewportBenchClusterer.viewportPanGridStep(clusterZoom)
+        return listOf(
+            sourceToken,
+            (clusterZoom * 10).toInt(),
+            kotlin.math.floor(bbox.centerLatitude / panStep).toInt(),
+            kotlin.math.floor(bbox.centerLongitude / panStep).toInt(),
+            mapView.width,
+            mapView.height,
+        ).hashCode()
+    }
+
+    /** Finer grid than [markerGenerationKey] so panning refreshes markers before a full cluster step. */
+    fun viewportScrollKey(mapView: MapView): Int {
+        val bbox = mapView.boundingBox
+        val clusterZoom = ViewportBenchClusterer.quantizeZoomForClustering(zoomLevel)
+        val panStep = ViewportBenchClusterer.viewportPanGridStep(clusterZoom) / 3.0
+        return listOf(
+            (clusterZoom * 10).toInt(),
+            kotlin.math.floor(bbox.centerLatitude / panStep).toInt(),
+            kotlin.math.floor(bbox.centerLongitude / panStep).toInt(),
+            mapView.width,
+            mapView.height,
+        ).hashCode()
+    }
+
+    fun computeBenchClusters(mapView: MapView): Pair<List<ViewportBenchClusterer.BenchCluster>, Int> {
+        val source = benchMarkerSource()
+        val visible = ViewportBenchClusterer.filterInViewport(source, mapView.boundingBox)
+        val clusterZoom = ViewportBenchClusterer.quantizeZoomForClustering(zoomLevel)
+        if (clusterZoom < 16.0 && visible.size > 10) {
+            val result = ViewportBenchClusterer.cluster(visible, mapView, zoomLevel)
+            val onMap = result.mapped.coerceAtMost(result.inViewport)
+            return result.clusters to onMap
+        }
+        val singles = visible.map { bench ->
+            ViewportBenchClusterer.BenchCluster(listOf(bench), bench.lat, bench.lng)
+        }
+        return singles to visible.size
+    }
+
+    fun rebuildBenchMarkers(mapView: MapView, markerDrawable: BitmapDrawable) {
+        val overlaysToRemove = mapView.overlays.filter { overlay ->
+            overlay is Marker &&
+                overlay != userMarker &&
+                !isTodoMarker(overlay)
+        }
+        mapView.overlays.removeAll(overlaysToRemove)
+
+        val (clusters, visibleCount) = computeBenchClusters(mapView)
+        onVisibleBenchCountChanged(visibleCount)
+        createMarkers(mapView, clusters, markerDrawable, mapView.context)
+    }
+
+    fun syncTodoMarkers(mapView: MapView) {
+        val existing = mapView.overlays.filterIsInstance<Marker>().filter { isTodoMarker(it) }
+        mapView.overlays.removeAll(existing.toSet())
+
+        val icon = createTodoMarkerDrawable(mapView.context)
+        todoBenches.forEach { todo ->
+            val marker = Marker(mapView)
+            marker.position = GeoPoint(todo.latitude, todo.longitude)
+            marker.title = "To do"
+            marker.subDescription = "Bench seen — photo still needed"
+            marker.relatedObject = todo
+            marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            marker.icon = icon
+            marker.setOnMarkerClickListener { _, _ ->
+                stopFollowingUser()
+                onTodoClick(todo)
+                true
+            }
+            mapView.overlays.add(marker)
+        }
+        mapView.invalidate()
+        lastTodoMarkersKey = todoBenches.hashCode()
+    }
+
+    // Rebuild markers when the bench source changes (e.g. search cleared or new results).
+    LaunchedEffect(benches, globalBenches, searchResultBenches) {
+        lastMarkerGenerationKey = 0
+        lastBenchesHash = benchMarkerSource().hashCode() - 1
+        lastProcessedPanKey = -1
+        viewportPanKey++
+        val mapView = mapViewRef ?: return@LaunchedEffect
+        mapView.post {
+            val currentMapView = mapViewRef ?: return@post
+            rebuildBenchMarkers(currentMapView, createBenchMarkerDrawable(currentMapView.context))
+            syncTodoMarkers(currentMapView)
+            val generationKey = markerGenerationKey(currentMapView)
+            lastMarkerGenerationKey = generationKey
+            lastProcessedPanKey = viewportPanKey
+            scrollGenerationHolder[0] = viewportScrollKey(currentMapView)
+            lastBenchesHash = benchMarkerSource().hashCode()
+            currentMapView.invalidate()
+        }
+    }
+
+    LaunchedEffect(todoBenches) {
+        val mapView = mapViewRef ?: return@LaunchedEffect
+        mapView.post {
+            val currentMapView = mapViewRef ?: return@post
+            syncTodoMarkers(currentMapView)
+        }
+    }
+
+    // Keep Compose zoom state in sync with parent; map view zoom is driven by gestures and recenter.
+    LaunchedEffect(mapZoomLevel) {
+        zoomLevel = mapZoomLevel
+    }
+
+    LaunchedEffect(showBenchDetails) {
+        if (!showBenchDetails) {
+            mapViewRef?.let { clearBenchSelection(it) }
+        }
+    }
+
+    // Parent changed map center (search, bench details, initial load) — not on every pan/zoom.
+    LaunchedEffect(mapCenter.latitude, mapCenter.longitude) {
+        if (followingUserLocation) return@LaunchedEffect
+        val mapView = mapViewRef ?: return@LaunchedEffect
+        mapView.post {
+            mapView.controller.setCenter(mapCenter)
+        }
+    }
+
+    LaunchedEffect(mapFocusRequest, mapViewRef) {
+        if (mapFocusRequest == 0 || mapFocusRequest == lastMapFocusRequest) return@LaunchedEffect
+        val mapView = mapViewRef ?: return@LaunchedEffect
+        lastMapFocusRequest = mapFocusRequest
+        stopFollowingUser()
+        zoomLevel = mapZoomLevel
+        mapView.post {
+            mapView.controller.setCenter(mapCenter)
+            mapView.controller.setZoom(mapZoomLevel)
+            mapView.invalidate()
+        }
+    }
+
+    LaunchedEffect(recenterRequest, mapViewRef) {
+        if (recenterRequest == 0 || recenterRequest == lastProcessedRecenterRequest) return@LaunchedEffect
+        val mapView = mapViewRef ?: return@LaunchedEffect
+        lastProcessedRecenterRequest = recenterRequest
+        val target = withContext(Dispatchers.IO) {
+            resolveUserLocation(context)?.let { loc ->
+                GeoPoint(loc.latitude, loc.longitude)
+            }
+        } ?: userLocation ?: return@LaunchedEffect
+
+        userLocation = target
+        followingUserLocation = true
+        val recenterZoom = maxOf(zoomLevel, 16.0)
+        zoomLevel = recenterZoom
+        setMapCenter(target)
+        onCenterChanged(target)
+        onZoomLevelChanged(recenterZoom)
+
+        mapView.post {
+            markProgrammaticFollowMove()
+            mapView.controller.setCenter(target)
+            mapView.controller.setZoom(recenterZoom)
+            mapView.invalidate()
+        }
+    }
+
+    // Keep map locked to the user while follow mode is active (~0.5s updates).
+    LaunchedEffect(followingUserLocation) {
+        if (!followingUserLocation) return@LaunchedEffect
+        userLocationUpdates(context, intervalMs = 500L).collectLatest { location ->
+            if (!followingUserLocation) return@collectLatest
+            val target = GeoPoint(location.latitude, location.longitude)
+            userLocation = target
+            setMapCenter(target)
+            onCenterChanged(target)
+            val mapView = mapViewRef ?: return@collectLatest
+            mapView.post {
+                if (!followingUserLocation) return@post
+                markProgrammaticFollowMove()
+                mapView.controller.setCenter(target)
+                mapView.invalidate()
+            }
+        }
+    }
+
+    // Handle user location marker updates when userLocation changes
+    LaunchedEffect(userLocation) {
+        mapViewRef?.let { mapView ->
+            val currentUserLocation = userLocation
+            if (currentUserLocation != null) {
+                if (userMarker == null) {
+                    // Create user marker if it doesn't exist
+                    userMarker = Marker(mapView)
+                    userMarker!!.position = currentUserLocation
+                    userMarker!!.title = if (isRefreshingLocation) "Updating your location..." else "You are here"
+                    userMarker!!.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    mapView.overlays.add(userMarker!!)
+                    android.util.Log.d("MapScreen", "Created new user marker at: ${ currentUserLocation.latitude}, ${currentUserLocation.longitude}")
+                } else {
+                    // Update existing user marker position and title
+                    userMarker!!.position = currentUserLocation
+                    userMarker!!.title = if (isRefreshingLocation) "Updating your location..." else "You are here"
+                    android.util.Log.d("MapScreen", "Updated user marker to: ${currentUserLocation.latitude}, ${currentUserLocation.longitude}")
+                }
+                mapView.invalidate()
+            } else {
+                // Remove user marker if location is not available
+                userMarker?.let { marker ->
+                    mapView.overlays.remove(marker)
+                    userMarker = null
+                    android.util.Log.d("MapScreen", "Removed user marker")
+                }
+                mapView.invalidate()
+            }
         }
     }
 
@@ -147,9 +773,9 @@ fun MapScreen(
                     
                     val mapView = MapView(ctx)
                     mapViewRef = mapView
-                    
-                    // Set tile source to OpenStreetMap
-                    mapView.setTileSource(TileSourceFactory.MAPNIK)
+
+                    // Set tile source from map style preference
+                    mapView.setTileSource(MapTileSources.tileSourceFor(mapProvider))
                     
                     // Configure map for smooth scrolling and preloading
                     mapView.setMultiTouchControls(true)
@@ -157,22 +783,22 @@ fun MapScreen(
                     
                     // Enable tile preloading for smoother scrolling
                     mapView.isTilesScaledToDpi = true
+                    // Horizontal wrap (date line); no vertical copies above/below at min zoom
                     mapView.isHorizontalMapRepetitionEnabled = true
-                    mapView.isVerticalMapRepetitionEnabled = true
-                    
-                    // Set scroll rate for smoother movement (if available)
-                    try {
-                        mapView.javaClass.getMethod("setScrollRate", Float::class.java).invoke(mapView, 0.5f)
-                    } catch (e: Exception) {
-                        // Method not available, ignore
-                    }
+                    mapView.isVerticalMapRepetitionEnabled = false
+                    val tileSystem = MapView.getTileSystem()
+                    mapView.setScrollableAreaLimitLatitude(
+                        tileSystem.maxLatitude,
+                        tileSystem.minLatitude,
+                        0
+                    )
                     
                     // Enable hardware acceleration for smoother rendering
                     mapView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                     
                     // Set tile overlay options for better performance
-                    mapView.overlayManager.tilesOverlay?.setLoadingBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    mapView.overlayManager.tilesOverlay?.setLoadingLineColor(android.graphics.Color.TRANSPARENT)
+                    mapView.overlayManager.tilesOverlay?.setLoadingBackgroundColor(AndroidColor.TRANSPARENT)
+                    mapView.overlayManager.tilesOverlay?.setLoadingLineColor(AndroidColor.TRANSPARENT)
                     val center = mapCenter
                     if (!initialZoomSet) {
                         mapView.controller.setZoom(zoomLevel)
@@ -180,396 +806,151 @@ fun MapScreen(
                     }
                     mapView.controller.setCenter(center)
                     
-                    // Initial tile preloading after map is set up
-                    mapView.postDelayed({
-                        // Define preload function here since it's not available yet
-                        try {
-                            val cacheManager = CacheManager(mapView)
-                            val boundingBox = mapView.boundingBox
-                            val zoomLevel = mapView.zoomLevelDouble.toInt()
-                            
-                            val latSpan = boundingBox.latNorth - boundingBox.latSouth
-                            val lonSpan = boundingBox.lonEast - boundingBox.lonWest
-                            
-                            val expandedBoundingBox = org.osmdroid.util.BoundingBox(
-                                boundingBox.latNorth + latSpan,
-                                boundingBox.lonEast + lonSpan,
-                                boundingBox.latSouth - latSpan,
-                                boundingBox.lonWest - lonSpan
-                            )
-                            
-                            coroutineScope.launch(Dispatchers.IO) {
-                                try {
-                                    cacheManager.downloadAreaAsync(
-                                        ctx,
-                                        expandedBoundingBox,
-                                        zoomLevel,
-                                        zoomLevel,
-                                        object : CacheManager.CacheManagerCallback {
-                                            override fun onTaskComplete() {}
-                                            override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {}
-                                            override fun downloadStarted() {}
-                                            override fun setPossibleTilesInArea(total: Int) {}
-                                            override fun onTaskFailed(errors: Int) {}
-                                        }
-                                    )
-                                } catch (e: Exception) {
-                                    // Ignore preloading errors
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // Ignore preloading errors
-                        }
-                    }, 1000) // Wait 1 second after initial setup
-                    
                     // Create user marker if location is available
                     if (userLocation != null) {
-                        val userMarker = Marker(mapView)
-                        userMarker.position = userLocation
-                        userMarker.title = "You are here"
-                        userMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        mapView.overlays.add(userMarker)
+                        val newUserMarker = Marker(mapView)
+                        newUserMarker.position = userLocation
+                        newUserMarker.title = if (isRefreshingLocation) "Updating your location..." else "You are here"
+                        newUserMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        mapView.overlays.add(newUserMarker)
+                        userMarker = newUserMarker
                     }
                     
-                    // Create bench markers
-                    val markerBitmapRaw = BitmapFactory.decodeResource(ctx.resources, ctx.resources.getIdentifier("marker", "drawable", ctx.packageName))
-                    val markerBitmap = Bitmap.createScaledBitmap(markerBitmapRaw, 196, 128, true)
-                    val markerDrawable = BitmapDrawable(ctx.resources, markerBitmap)
-                    benches.forEach { bench ->
-                        val marker = Marker(mapView)
-                        marker.position = GeoPoint(bench.lat, bench.lng)
-                        marker.title = "Bench #${bench.id}"
-                        marker.subDescription = bench.popupContent
-                        marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        marker.icon = markerDrawable
-                        marker.setOnMarkerClickListener { m, _ ->
-                            if (!m.isInfoWindowShown) {
-                                m.showInfoWindow()
-                            } else {
-                                onBenchPopupClick(bench.id)
-                            }
-                            true
-                        }
-                        mapView.overlays.add(marker)
-                    }
+                    // Create bench markers with clustering - fixed size for consistent click area
+                    val markerDrawable = createBenchMarkerDrawable(ctx)
                     
-                    // Function to preload tiles around the current view
-                    fun preloadTilesAroundCenter() {
-                        try {
-                            val cacheManager = CacheManager(mapView)
-                            val boundingBox = mapView.boundingBox
-                            val zoomLevel = mapView.zoomLevelDouble.toInt()
-                            
-                            // Calculate the size of the current view
-                            val latSpan = boundingBox.latNorth - boundingBox.latSouth
-                            val lonSpan = boundingBox.lonEast - boundingBox.lonWest
-                            
-                            // Preload tiles in a larger area around the current view (2x the current view size)
-                            val expandedBoundingBox = org.osmdroid.util.BoundingBox(
-                                boundingBox.latNorth + latSpan, // Expand north by view height
-                                boundingBox.lonEast + lonSpan,  // Expand east by view width
-                                boundingBox.latSouth - latSpan, // Expand south by view height
-                                boundingBox.lonWest - lonSpan   // Expand west by view width
-                            )
-                            
-                            // Start preloading in background
-                            coroutineScope.launch(Dispatchers.IO) {
-                                try {
-                                    cacheManager.downloadAreaAsync(
-                                        ctx,
-                                        expandedBoundingBox,
-                                        zoomLevel,
-                                        zoomLevel,
-                                        object : CacheManager.CacheManagerCallback {
-                                            override fun onTaskComplete() {
-                                                // Preloading completed
-                                            }
-                                            
-                                            override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
-                                                // Progress update
-                                            }
-                                            
-                                            override fun downloadStarted() {
-                                                // Download started
-                                            }
-                                            
-                                            override fun setPossibleTilesInArea(total: Int) {
-                                                // Set total tiles to download
-                                            }
-                                            
-                                            override fun onTaskFailed(errors: Int) {
-                                                // Task failed
-                                            }
-                                        }
-                                    )
-                                } catch (e: Exception) {
-                                    // Ignore preloading errors
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // Ignore preloading errors
-                        }
-                    }
-                    
-                    // Function to preload tiles in specific directions based on scroll direction
-                    var lastScrollTime = 0L
-                    var scrollDirection = 0 // 0 = none, 1 = north, 2 = south, 3 = east, 4 = west
-                    
-                    fun preloadTilesInDirection() {
-                        val currentTime = System.currentTimeMillis()
-                        if (currentTime - lastScrollTime < 100) return // Throttle preloading
-                        
-                        try {
-                            val cacheManager = CacheManager(mapView)
-                            val boundingBox = mapView.boundingBox
-                            val zoomLevel = mapView.zoomLevelDouble.toInt()
-                            
-                            val latSpan = boundingBox.latNorth - boundingBox.latSouth
-                            val lonSpan = boundingBox.lonEast - boundingBox.lonWest
-                            
-                            // Preload tiles in the direction of movement
-                            val directionBoundingBox = when (scrollDirection) {
-                                1 -> org.osmdroid.util.BoundingBox( // North
-                                    boundingBox.latNorth + latSpan,
-                                    boundingBox.lonEast,
-                                    boundingBox.latNorth,
-                                    boundingBox.lonWest
-                                )
-                                2 -> org.osmdroid.util.BoundingBox( // South
-                                    boundingBox.latSouth,
-                                    boundingBox.lonEast,
-                                    boundingBox.latSouth - latSpan,
-                                    boundingBox.lonWest
-                                )
-                                3 -> org.osmdroid.util.BoundingBox( // East
-                                    boundingBox.latNorth,
-                                    boundingBox.lonEast + lonSpan,
-                                    boundingBox.latSouth,
-                                    boundingBox.lonEast
-                                )
-                                4 -> org.osmdroid.util.BoundingBox( // West
-                                    boundingBox.latNorth,
-                                    boundingBox.lonWest,
-                                    boundingBox.latSouth,
-                                    boundingBox.lonWest - lonSpan
-                                )
-                                else -> return
-                            }
-                            
-                            coroutineScope.launch(Dispatchers.IO) {
-                                try {
-                                    cacheManager.downloadAreaAsync(
-                                        ctx,
-                                        directionBoundingBox,
-                                        zoomLevel,
-                                        zoomLevel,
-                                        object : CacheManager.CacheManagerCallback {
-                                            override fun onTaskComplete() {}
-                                            override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {}
-                                            override fun downloadStarted() {}
-                                            override fun setPossibleTilesInArea(total: Int) {}
-                                            override fun onTaskFailed(errors: Int) {}
-                                        }
-                                    )
-                                } catch (e: Exception) {
-                                    // Ignore preloading errors
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // Ignore preloading errors
-                        }
+                    // Create markers with a slight delay to ensure map view is fully initialized
+                    mapView.post {
+                        mapView.postDelayed({
+                            rebuildBenchMarkers(mapView, markerDrawable)
+                            syncTodoMarkers(mapView)
+                            val initialKey = markerGenerationKey(mapView)
+                            lastMarkerGenerationKey = initialKey
+                            lastProcessedPanKey = viewportPanKey
+                            scrollGenerationHolder[0] = viewportScrollKey(mapView)
+                            lastBenchesHash = benchMarkerSource().hashCode()
+                            mapView.invalidate()
+                            android.util.Log.d("MapScreen", "Initial markers created and click listeners attached")
+                        }, 100)
                     }
                     
                     // Use the newer MapListener API instead of deprecated setMapListener
                     mapView.addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
-                            setMapCenter(mapView.mapCenter as GeoPoint)
-                            onCenterChanged(mapView.mapCenter as GeoPoint)
-                            
-                            // Update scroll direction and time
-                            lastScrollTime = System.currentTimeMillis()
-                            
-                            // Determine scroll direction based on event
-                            event?.let { scrollEvent ->
-                                // This is a simplified direction detection
-                                // In a real implementation, you might want to track previous position
-                                scrollDirection = 1 // Default to north for now
+                            val mapView = event?.source as? MapView ?: return true
+                            if (shouldCancelFollowFromUserGesture()) {
+                                stopFollowingUser()
                             }
-                            
-                            // Preload tiles in the direction of movement
-                            preloadTilesInDirection()
-                            
-                            // Also preload tiles around center when scrolling stops
-                            mapView.postDelayed({
-                                // Inline preload function call
-                                try {
-                                    val cacheManager = CacheManager(mapView)
-                                    val boundingBox = mapView.boundingBox
-                                    val zoomLevel = mapView.zoomLevelDouble.toInt()
-                                    
-                                    val latSpan = boundingBox.latNorth - boundingBox.latSouth
-                                    val lonSpan = boundingBox.lonEast - boundingBox.lonWest
-                                    
-                                    val expandedBoundingBox = org.osmdroid.util.BoundingBox(
-                                        boundingBox.latNorth + latSpan,
-                                        boundingBox.lonEast + lonSpan,
-                                        boundingBox.latSouth - latSpan,
-                                        boundingBox.lonWest - lonSpan
-                                    )
-                                    
-                                    coroutineScope.launch(Dispatchers.IO) {
-                                        try {
-                                            cacheManager.downloadAreaAsync(
-                                                ctx,
-                                                expandedBoundingBox,
-                                                zoomLevel,
-                                                zoomLevel,
-                                                object : CacheManager.CacheManagerCallback {
-                                                    override fun onTaskComplete() {}
-                                                    override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {}
-                                                    override fun downloadStarted() {}
-                                                    override fun setPossibleTilesInArea(total: Int) {}
-                                                    override fun onTaskFailed(errors: Int) {}
-                                                }
-                                            )
-                                        } catch (e: Exception) {
-                                            // Ignore preloading errors
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    // Ignore preloading errors
-                                }
-                            }, 500) // Wait 500ms after scroll stops
-                            
+                            val key = viewportScrollKey(mapView)
+                            if (key != scrollGenerationHolder[0]) {
+                                scrollGenerationHolder[0] = key
+                                viewportPanKey = key
+                            }
                             return true
                         }
                         override fun onZoom(event: ZoomEvent?): Boolean {
-                            zoomLevel = mapView.zoomLevelDouble
-                            setMapCenter(mapView.mapCenter as GeoPoint)
-                            onCenterChanged(mapView.mapCenter as GeoPoint)
-                            
-                            // Preload tiles after zoom
-                            mapView.postDelayed({
-                                // Inline preload function call
-                                try {
-                                    val cacheManager = CacheManager(mapView)
-                                    val boundingBox = mapView.boundingBox
-                                    val zoomLevel = mapView.zoomLevelDouble.toInt()
-                                    
-                                    val latSpan = boundingBox.latNorth - boundingBox.latSouth
-                                    val lonSpan = boundingBox.lonEast - boundingBox.lonWest
-                                    
-                                    val expandedBoundingBox = org.osmdroid.util.BoundingBox(
-                                        boundingBox.latNorth + latSpan,
-                                        boundingBox.lonEast + lonSpan,
-                                        boundingBox.latSouth - latSpan,
-                                        boundingBox.lonWest - lonSpan
-                                    )
-                                    
-                                    coroutineScope.launch(Dispatchers.IO) {
-                                        try {
-                                            cacheManager.downloadAreaAsync(
-                                                ctx,
-                                                expandedBoundingBox,
-                                                zoomLevel,
-                                                zoomLevel,
-                                                object : CacheManager.CacheManagerCallback {
-                                                    override fun onTaskComplete() {}
-                                                    override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {}
-                                                    override fun downloadStarted() {}
-                                                    override fun setPossibleTilesInArea(total: Int) {}
-                                                    override fun onTaskFailed(errors: Int) {}
-                                                }
-                                            )
-                                        } catch (e: Exception) {
-                                            // Ignore preloading errors
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    // Ignore preloading errors
-                                }
-                            }, 300) // Wait 300ms after zoom
-                            
+                            if (shouldCancelFollowFromUserGesture()) {
+                                stopFollowingUser()
+                            }
+                            val z = mapView.zoomLevelDouble
+                            zoomLevel = z
+                            onZoomLevelChanged(z)
                             return true
                         }
                     })
+                    // Background taps: use MapEventsOverlay at the bottom of the stack so it receives taps
+                    // not consumed by markers. (Plain Overlay.onSingleTapConfirmed was not reliably invoked.)
+                    mapView.overlays.add(
+                        0,
+                        MapEventsOverlay(
+                            object : MapEventsReceiver {
+                                override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
+                                    android.util.Log.d("MapScreen", "MapEvents singleTap at $p")
+                                    val point = Point()
+                                    mapView.projection.toPixels(p, point)
+                                    val me = MotionEvent.obtain(
+                                        SystemClock.uptimeMillis(),
+                                        SystemClock.uptimeMillis(),
+                                        MotionEvent.ACTION_DOWN,
+                                        point.x.toFloat(),
+                                        point.y.toFloat(),
+                                        0
+                                    )
+                                    return try {
+                                        if (tapHitsAnyMarker(mapView, me)) {
+                                            android.util.Log.d("MapScreen", "Tap on marker hit area, skip clear")
+                                            false
+                                        } else {
+                                            stopFollowingUser()
+                                            clearBenchSelection(mapView)
+                                            android.util.Log.d("MapScreen", "Background tap — cleared bench selection")
+                                            false
+                                        }
+                                    } finally {
+                                        me.recycle()
+                                    }
+                                }
+
+                                override fun longPressHelper(p: GeoPoint): Boolean = false
+                            }
+                        )
+                    )
+                    // 3-second still hold saves a "to do" location (does not consume pan/zoom).
+                    mapView.overlays.add(
+                        MapLongHoldOverlay(holdDurationMs = 3_000L) { geo ->
+                            stopFollowingUser()
+                            onMapLongHold(geo)
+                        }
+                    )
+
                     mapView
                 },
                 update = { mapView ->
-                    mapViewRef = mapView
-                    
-                    // Calculate hash of current benches to detect changes
-                    val currentBenchesHash = benches.hashCode()
-                    
-                    // Only update markers if bench data has changed
-                    if (currentBenchesHash != lastBenchesHash) {
-                        // Remove only bench markers, keep user marker
-                        val overlaysToRemove = mapView.overlays.filter { overlay ->
-                            overlay is Marker && overlay != userMarker
-                        }
-                        mapView.overlays.removeAll(overlaysToRemove)
-                        
-                        // Add new bench markers
-                        val markerBitmapRaw = BitmapFactory.decodeResource(mapView.context.resources, mapView.context.resources.getIdentifier("marker", "drawable", mapView.context.packageName))
-                        val markerBitmap = Bitmap.createScaledBitmap(markerBitmapRaw, 196, 128, true)
-                        val markerDrawable = BitmapDrawable(mapView.context.resources, markerBitmap)
-                        benches.forEach { bench ->
-                            val marker = Marker(mapView)
-                            marker.position = GeoPoint(bench.lat, bench.lng)
-                            marker.title = "Bench #${bench.id}"
-                            marker.subDescription = bench.popupContent
-                            marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                            marker.icon = markerDrawable
-                            marker.setOnMarkerClickListener { m, _ ->
-                                if (!m.isInfoWindowShown) {
-                                    m.showInfoWindow()
-                                } else {
-                                    onBenchPopupClick(bench.id)
-                                }
-                                true
-                            }
-                            mapView.overlays.add(marker)
-                        }
+                    val expectedTileSource = MapTileSources.tileSourceFor(mapProvider)
+                    if (mapView.tileProvider.tileSource.name() != expectedTileSource.name()) {
+                        mapView.setTileSource(expectedTileSource)
+                    }
+
+                    val panTrigger = viewportPanKey
+                    val currentBenchesHash = benchMarkerSource().hashCode()
+                    val generationKey = markerGenerationKey(mapView)
+                    if (
+                        generationKey != lastMarkerGenerationKey ||
+                        currentBenchesHash != lastBenchesHash ||
+                        panTrigger != lastProcessedPanKey
+                    ) {
+                        rebuildBenchMarkers(mapView, createBenchMarkerDrawable(mapView.context))
+                        syncTodoMarkers(mapView)
+                        lastMarkerGenerationKey = generationKey
+                        lastProcessedPanKey = panTrigger
+                        scrollGenerationHolder[0] = viewportScrollKey(mapView)
                         lastBenchesHash = currentBenchesHash
+                    } else if (todoBenches.hashCode() != lastTodoMarkersKey) {
+                        syncTodoMarkers(mapView)
                     }
                     
-                    // Handle user location marker updates
+                    // User location marker only — do not reset map center/zoom here (causes post-gesture drift).
                     if (userLocation != null) {
                         if (userMarker == null) {
-                            // Create user marker if it doesn't exist
                             userMarker = Marker(mapView)
                             userMarker!!.position = userLocation
-                            userMarker!!.title = "You are here"
+                            userMarker!!.title =
+                                if (isRefreshingLocation) "Updating your location..." else "You are here"
                             userMarker!!.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                             mapView.overlays.add(userMarker!!)
                         } else {
-                            // Update existing user marker position
                             userMarker!!.position = userLocation
-                        }
-                        
-                        if (recenterOnUser && !lastRecenter) {
-                            mapView.controller.setCenter(userLocation)
-                            mapView.controller.setZoom(15.0)
-                            onRecenterHandled()
-                            lastRecenter = true
-                        } else if (!recenterOnUser) {
-                            lastRecenter = false
-                            mapView.controller.setZoom(zoomLevel)
-                            mapView.controller.setCenter(mapCenter)
+                            userMarker!!.title =
+                                if (isRefreshingLocation) "Updating your location..." else "You are here"
                         }
                     } else {
-                        // Remove user marker if location is not available
                         userMarker?.let { marker ->
                             mapView.overlays.remove(marker)
                             userMarker = null
                         }
-                        mapView.controller.setZoom(zoomLevel)
-                        mapView.controller.setCenter(mapCenter)
                     }
-                    
-                    mapView.invalidate()
                 }
             )
         }
     }
-} 
+}

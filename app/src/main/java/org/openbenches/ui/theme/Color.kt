@@ -2,10 +2,12 @@ package org.openbenches.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
-
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+/** Brand colours from https://openbenches.org/ (www/public/css/style.css) */
+val OpenBenchesPlaqueGold = Color(0xFFFFBA00)
+val OpenBenchesSkyBlue = Color(0xFF7EB1C8)
+val OpenBenchesGrassGreen = Color(0xFF007700)
+val OpenBenchesGroundBrown = Color(0xFF8C5015)
+val OpenBenchesCream = Color(0xFFF0F0F0)
+val OpenBenchesBlack = Color(0xFF040404)
+val OpenBenchesBorder = Color(0xFF191E20)
+val OpenBenchesDanger = Color(0xFFFF0000)
