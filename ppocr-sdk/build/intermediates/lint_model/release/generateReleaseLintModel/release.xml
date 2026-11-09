@@ -27,6 +27,6 @@
       type="MAIN"
       applicationId="com.paddle.ocr"
       generatedSourceFolders="build/generated/ap_generated_sources/release/out"
-      desugaredMethodsFiles="/home/simon/.gradle/caches/9.8.2/transforms/7d5cc95de2096ddb9d70f86be4ea75f0/transformed/D8BackportedDesugaredMethods.txt">
+      desugaredMethodsFiles="/home/simon/.gradle/caches/9.9.0/transforms/b502554ad89fa75d06a579de18b1d326/transformed/D8BackportedDesugaredMethods.txt">
   </artifact>
 </variant>
