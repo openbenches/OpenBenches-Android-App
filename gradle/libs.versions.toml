@@ -20,6 +20,7 @@ coil = "2.7.0"
 # 2.13+ ships Kotlin 2.4 metadata; stay on 2.2.x until the project Kotlin is upgraded.
 landscapistGlide = "2.2.6"
 opencv = "4.12.0"
+materialIconsExtended = "1.6.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,18 +37,19 @@ ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview
 ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 material3 = { group = "androidx.compose.material3", name = "material3" }
-androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
-osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
+# Flat aliases (no nested hyphens) so IDE type-safe accessors resolve reliably.
+exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
+osmdroid = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
-retrofit-converter-gson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "retrofit" }
+retrofitConverterGson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "retrofit" }
 auth0 = { group = "com.auth0.android", name = "auth0", version.ref = "auth0" }
-androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
-play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
-androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
-accompanist-permissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanistPermissions" }
-coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
-coil-svg = { group = "io.coil-kt", name = "coil-svg", version.ref = "coil" }
-landscapist-glide = { group = "com.github.skydoves", name = "landscapist-glide", version.ref = "landscapistGlide" }
+browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
+playServicesLocation = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
+materialIconsExtended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIconsExtended" }
+accompanistPermissions = { group = "com.google.accompanist", name = "accompanist-permissions", version.ref = "accompanistPermissions" }
+coilCompose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+coilSvg = { group = "io.coil-kt", name = "coil-svg", version.ref = "coil" }
+landscapistGlide = { group = "com.github.skydoves", name = "landscapist-glide", version.ref = "landscapistGlide" }
 opencv = { group = "org.opencv", name = "opencv", version.ref = "opencv" }
 
 [plugins]

@@ -97,7 +97,7 @@ configurations.configureEach {
 dependencies {
 
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.exifinterface)
+    implementation(libs.exifinterface)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.compose.bom))
@@ -114,31 +114,31 @@ dependencies {
     debugImplementation(libs.ui.test.manifest)
 
     // osmdroid for OpenStreetMap
-    implementation(libs.osmdroid.android)
+    implementation(libs.osmdroid)
 
     // Retrofit for networking (2.x — 3.x is a separate migration)
     implementation(libs.retrofit)
-    implementation(libs.retrofit.converter.gson)
+    implementation(libs.retrofitConverterGson)
     // Auth0 2.x — 3+/4.x needs a dedicated migration
     implementation(libs.auth0)
     // Align with Auth0’s Chrome Custom Tabs usage so connectAndInitialize / warmup APIs are available.
-    implementation(libs.androidx.browser)
+    implementation(libs.browser)
 
     // Location services for user location
-    implementation(libs.play.services.location)
+    implementation(libs.playServicesLocation)
 
     // Extended material icons for Compose (MyLocation icon)
-    implementation(libs.androidx.material.icons.extended)
+    implementation(libs.materialIconsExtended)
 
     // Accompanist permissions for runtime permission handling in Compose
-    implementation(libs.accompanist.permissions)
+    implementation(libs.accompanistPermissions)
 
     // Coil for image loading in Compose
-    implementation(libs.coil.compose)
-    implementation(libs.coil.svg)
+    implementation(libs.coilCompose)
+    implementation(libs.coilSvg)
 
     // Landscapist Glide for image loading in Compose
-    implementation(libs.landscapist.glide)
+    implementation(libs.landscapistGlide)
 
     // OpenCV 4.x for inscription photo preprocessing (5.x is a major bump)
     implementation(libs.opencv)
