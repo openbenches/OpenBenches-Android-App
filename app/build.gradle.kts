@@ -40,7 +40,7 @@ android {
             // R8 generates mapping.txt — upload it with each Play release to clear the
             // "no deobfuscation file" warning (see proguard-rules.pro header).
             isMinifyEnabled = true
-            isShrinkResources = false
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -85,10 +85,19 @@ kotlin {
     }
 }
 
+// Keep classpath kotlin-stdlib on the compiler version (landscapist/etc. must not pull 2.4+).
+configurations.configureEach {
+    resolutionStrategy {
+        force("org.jetbrains.kotlin:kotlin-stdlib:${libs.versions.kotlin.get()}")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk7:${libs.versions.kotlin.get()}")
+        force("org.jetbrains.kotlin:kotlin-stdlib-jdk8:${libs.versions.kotlin.get()}")
+    }
+}
+
 dependencies {
 
     implementation(libs.androidx.core.ktx)
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation(libs.androidx.exifinterface)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.compose.bom))
@@ -105,38 +114,34 @@ dependencies {
     debugImplementation(libs.ui.test.manifest)
 
     // osmdroid for OpenStreetMap
-    implementation("org.osmdroid:osmdroid-android:6.1.16")
+    implementation(libs.osmdroid.android)
 
-    // Retrofit for networking
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
-    implementation("com.auth0.android:auth0:2.11.0")
+    // Retrofit for networking (2.x — 3.x is a separate migration)
+    implementation(libs.retrofit)
+    implementation(libs.retrofit.converter.gson)
+    // Auth0 2.x — 3+/4.x needs a dedicated migration
+    implementation(libs.auth0)
     // Align with Auth0’s Chrome Custom Tabs usage so connectAndInitialize / warmup APIs are available.
-    implementation("androidx.browser:browser:1.8.0")
-
-    // Compose UI Test
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.6.1")
-    debugImplementation("androidx.compose.ui:ui-tooling:1.6.1")
-    debugImplementation("androidx.compose.ui:ui-test-manifest:1.6.1")
+    implementation(libs.androidx.browser)
 
     // Location services for user location
-    implementation("com.google.android.gms:play-services-location:21.2.0")
+    implementation(libs.play.services.location)
 
     // Extended material icons for Compose (MyLocation icon)
-    implementation("androidx.compose.material:material-icons-extended:1.6.1")
+    implementation(libs.androidx.material.icons.extended)
 
     // Accompanist permissions for runtime permission handling in Compose
-    implementation("com.google.accompanist:accompanist-permissions:0.34.0")
+    implementation(libs.accompanist.permissions)
 
     // Coil for image loading in Compose
-    implementation("io.coil-kt:coil-compose:2.4.0")
-    implementation("io.coil-kt:coil-svg:2.4.0")
+    implementation(libs.coil.compose)
+    implementation(libs.coil.svg)
 
     // Landscapist Glide for image loading in Compose
-    implementation("com.github.skydoves:landscapist-glide:2.2.6")
+    implementation(libs.landscapist.glide)
 
-    // OpenCV for inscription photo preprocessing before PaddleOCR
-    implementation("org.opencv:opencv:4.12.0")
+    // OpenCV 4.x for inscription photo preprocessing (5.x is a major bump)
+    implementation(libs.opencv)
 
     // Official PaddleOCR Android ONNX SDK (PP-OCRv5 mobile) — uses 16 KB-aligned onnxruntime-android.
     implementation(project(":ppocr-sdk"))

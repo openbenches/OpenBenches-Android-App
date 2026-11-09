@@ -223,7 +223,7 @@ class MainActivity : ComponentActivity() {
                 val todoBenchStore = remember { TodoBenchStore(this@MainActivity) }
                 var todoBenches by remember { mutableStateOf(todoBenchStore.list()) }
                 var todoPendingDelete by remember { mutableStateOf<TodoBench?>(null) }
-                /** When true, [searchResultBenches] is the To-Do list shown like a search filter. */
+                // When true, the To-Do list is shown on the map like a search filter.
                 var todoListFilterActive by remember { mutableStateOf(false) }
 
                 fun refreshPendingUploadCount() {

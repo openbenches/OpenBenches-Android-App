@@ -31,7 +31,6 @@
 -keep,allowoptimization interface <1>
 -keep,allowoptimization,allowshrinking,allowobfuscation class <3>
 -keep interface org.openbenches.data.OpenBenchesService { *; }
--keep interface org.openbenches.data.OpenCageService { *; }
 
 # --- BuildConfig (Auth0 etc.) ---
 -keep class org.openbenches.BuildConfig { *; }

@@ -69,9 +69,9 @@ fun PendingUploadsScreen(
     onBack: () -> Unit,
     onEdit: (PendingBenchUpload) -> Unit,
     authToken: String?,
-    authUsername: String? = null,
     onPendingChanged: () -> Unit,
     modifier: Modifier = Modifier,
+    authUsername: String? = null,
 ) {
     val context = LocalContext.current
     val store = remember { PendingBenchUploadStore(context) }

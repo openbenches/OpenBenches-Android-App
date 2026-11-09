@@ -2,9 +2,8 @@
 
 Kotlin / Jetpack Compose source for the OpenBenches Android app.
 
-For setup, build, Auth0 config, API notes, and licence, see the project root:
-
-**[README.md](../../../../../../README.md)**
+For setup, build, Auth0 config, API notes, and licence, see the project root
+`README.md`.
 
 ## Layout
 
