@@ -102,7 +102,7 @@ fun OpenBenchesBorderedSurface(
         shape = OpenBenchesHeaderShape,
         color = color,
         shadowElevation = 4.dp,
-        border = BorderStroke(4.dp, MaterialTheme.colorScheme.outline),
+        border = BorderStroke(4.dp, OpenBenchesBlack),
         content = content,
     )
 }

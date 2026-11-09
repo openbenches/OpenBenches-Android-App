@@ -9,7 +9,6 @@ import com.paddle.ocr.PaddleOCR
 import com.paddle.ocr.PaddleOCRConfig
 import com.paddle.ocr.model.OCRResult
 import com.paddle.ocr.util.OpenCVUtils
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -73,13 +72,6 @@ object InscriptionOcr {
                 bitmap.recycle()
             }
         }
-    }
-
-    /**
-     * Blocking helper for callers that are not already in a coroutine (e.g. background Thread).
-     */
-    fun ensureEngineBlocking(context: Context): PaddleOCR? = runBlocking {
-        ensureEngine(context)
     }
 
     suspend fun recognizeBitmap(ocr: PaddleOCR, input: Bitmap): String {

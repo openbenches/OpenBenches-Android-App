@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.openbenches.data.AuthJwt
 import org.openbenches.data.PendingBenchUpload
 import org.openbenches.data.PendingBenchUploadStore
 import org.openbenches.data.UploadBenchResult
@@ -68,6 +69,7 @@ fun PendingUploadsScreen(
     onBack: () -> Unit,
     onEdit: (PendingBenchUpload) -> Unit,
     authToken: String?,
+    authUsername: String? = null,
     onPendingChanged: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -84,7 +86,16 @@ fun PendingUploadsScreen(
     var uploadSuccessBulkIds by remember { mutableStateOf<List<String>?>(null) }
     var showGpsFailureDialog by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var pendingSingleUpload by remember { mutableStateOf<PendingBenchUpload?>(null) }
+    var showUploadAllConfirm by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+    val uploadAsUsername = remember(authToken, authUsername) {
+        if (authToken.isNullOrBlank()) {
+            "Anon"
+        } else {
+            AuthJwt.displayName(AuthJwt.decodePayloadClaims(authToken), authUsername) ?: "Anon"
+        }
+    }
 
     val isBusy = uploadingId != null || isUploadingAll
 
@@ -237,7 +248,7 @@ fun PendingUploadsScreen(
                 if (pending.size > 1) {
                     item(key = "upload_all") {
                         Button(
-                            onClick = { uploadAllBenches() },
+                            onClick = { showUploadAllConfirm = true },
                             enabled = !isBusy,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
@@ -251,7 +262,7 @@ fun PendingUploadsScreen(
                         isUploading = uploadingId == item.id,
                         actionsEnabled = !isBusy,
                         onEdit = { onEdit(item) },
-                        onUpload = { uploadSingle(item) },
+                        onUpload = { pendingSingleUpload = item },
                         onDelete = {
                             store.delete(item.id)
                             refresh()
@@ -260,6 +271,56 @@ fun PendingUploadsScreen(
                 }
             }
         }
+    }
+
+    pendingSingleUpload?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingSingleUpload = null },
+            title = { Text("Upload bench") },
+            text = {
+                Text("Upload bench with username: $uploadAsUsername")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingSingleUpload = null
+                        uploadSingle(item)
+                    },
+                ) {
+                    Text("Upload")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSingleUpload = null }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
+    if (showUploadAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { showUploadAllConfirm = false },
+            title = { Text("Upload all benches") },
+            text = {
+                Text("Upload all saved benches with username: $uploadAsUsername")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showUploadAllConfirm = false
+                        uploadAllBenches()
+                    },
+                ) {
+                    Text("Upload all")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUploadAllConfirm = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 
     errorMessage?.let { message ->

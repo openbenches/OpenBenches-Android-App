@@ -13,19 +13,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.Person
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
@@ -71,9 +64,9 @@ suspend fun fetchBenchesLeaderboardData(): List<LeaderboardBenchesEntry> = withC
 
         var rank = 1
         while (tableMatcher.find()) {
-            val userId = tableMatcher.group(1) ?: ""
+            val userId = tableMatcher.group(1).orEmpty()
             val platform = tableMatcher.group(2) ?: "unknown"
-            val avatarUrl = tableMatcher.group(3) ?: ""
+            val avatarUrl = tableMatcher.group(3).orEmpty()
             val username = tableMatcher.group(4)?.trim() ?: "Unknown User"
             val benchesCount = tableMatcher.group(5)?.replace(",", "")?.toIntOrNull() ?: 0
             val photosCount = tableMatcher.group(6)?.replace(",", "")?.toIntOrNull() ?: 0
@@ -85,24 +78,22 @@ suspend fun fetchBenchesLeaderboardData(): List<LeaderboardBenchesEntry> = withC
                     totalBenches = benchesCount,
                     totalPhotos = photosCount,
                     platformIcon = platform,
-                    avatarUrl = if (avatarUrl.isNotEmpty()) avatarUrl else null,
-                    userId = if (userId.isNotEmpty()) userId else null
+                    avatarUrl = avatarUrl.ifEmpty { null },
+                    userId = userId.ifEmpty { null },
                 )
             )
             rank++
         }
         
         // If parsing failed, return fallback data
-        if (entries.isEmpty()) {
+        entries.ifEmpty {
             listOf(
                 LeaderboardBenchesEntry(1, "jrbray1", 4284, 12651, "github", "https://avatars0.githubusercontent.com/u/25801685?v=4&s=48", "6143"),
                 LeaderboardBenchesEntry(2, "sjorford", 3232, 9036, "twitter", "https://res.cloudinary.com/openbenches-org/image/twitter/27730624.jpg", "1708"),
                 LeaderboardBenchesEntry(3, "ukmoose", 2856, 6875, "twitter", "https://res.cloudinary.com/openbenches-org/image/twitter/222949835.jpg", "1781")
             )
-        } else {
-            entries
         }
-    } catch (e: Exception) {
+    } catch (_: Exception) {
         // Return fallback data on error
         listOf(
             LeaderboardBenchesEntry(1, "jrbray1", 4284, 12651, "github", "https://avatars0.githubusercontent.com/u/25801685?v=4&s=48", "6143"),
@@ -210,19 +201,27 @@ fun LeaderboardBenchesScreen(
                         text = "Top Contributors",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
+                    val fieldContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        placeholder = { Text("Search contributors") },
+                        placeholder = {
+                            Text(
+                                "Search contributors",
+                                color = fieldContentColor.copy(alpha = 0.7f),
+                            )
+                        },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Filled.Search,
                                 contentDescription = null,
+                                tint = fieldContentColor,
                             )
                         },
                         trailingIcon = {
@@ -231,10 +230,24 @@ fun LeaderboardBenchesScreen(
                                     Icon(
                                         imageVector = Icons.Filled.Clear,
                                         contentDescription = "Clear search",
+                                        tint = fieldContentColor,
                                     )
                                 }
                             }
                         },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = fieldContentColor,
+                            unfocusedTextColor = fieldContentColor,
+                            cursorColor = fieldContentColor,
+                            focusedBorderColor = fieldContentColor,
+                            unfocusedBorderColor = fieldContentColor.copy(alpha = 0.6f),
+                            focusedLeadingIconColor = fieldContentColor,
+                            unfocusedLeadingIconColor = fieldContentColor,
+                            focusedTrailingIconColor = fieldContentColor,
+                            unfocusedTrailingIconColor = fieldContentColor,
+                            focusedPlaceholderColor = fieldContentColor.copy(alpha = 0.7f),
+                            unfocusedPlaceholderColor = fieldContentColor.copy(alpha = 0.7f),
+                        ),
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
@@ -334,13 +347,13 @@ private fun LeaderboardBenchesItem(
     onUserClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val canOpenMap = !entry.userId.isNullOrBlank()
+    val userId = entry.userId?.takeIf { it.isNotBlank() }
     Card(
         modifier = modifier
             .fillMaxWidth()
             .then(
-                if (canOpenMap) {
-                    Modifier.clickable(role = Role.Button) { onUserClick(entry.userId!!) }
+                if (userId != null) {
+                    Modifier.clickable(role = Role.Button) { onUserClick(userId) }
                 } else {
                     Modifier
                 }

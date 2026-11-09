@@ -1,20 +1,18 @@
-# OpenBenches Android App
+# Application source (`org.openbenches`)
 
-Displays benches from [OpenBenches API](https://openbenches.org/api/benches/) on OpenStreetMap using osmdroid.
+Kotlin / Jetpack Compose source for the OpenBenches Android app.
 
-## Features
-- Fetches and displays all benches as pins
-- Different pin colors for different types (demo: id mod 3)
-- Error handling and Sentry integration
-- Unit and UI tests with Compose
-- Uses OpenStreetMap for map display
+For setup, build, Auth0 config, API notes, and licence, see the project root:
 
-## Setup
-1. Add your Sentry DSN in `MainActivity.kt` (replace the placeholder).
-2. Build and run the app.
+**[README.md](../../../../../../README.md)**
 
-## Testing
-- Run tests with `./gradlew test` and `./gradlew connectedAndroidTest`
+## Layout
 
-## API
-- [OpenBenches API](https://openbenches.org/api/benches/)
+| Path | Contents |
+|------|----------|
+| `MainActivity.kt` | Navigation shell, About screen, map chrome, menus |
+| `OpenBenchesApplication.kt` | Application class, Coil image loader |
+| `ui/` | Screens & map helpers (MapScreen, AddBench, EditBench, …) |
+| `ui/theme/` | Colours, typography, shared Compose components |
+| `data/` | Retrofit/API, Auth JWT, pending uploads, to-do store, caches |
+| `util/` | Location, OCR, weserv image URLs, photo rotate |

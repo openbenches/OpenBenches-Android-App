@@ -16,6 +16,8 @@
   <androidx.appcompat/>
   <androidx.appfunctions/>
   <androidx.appsearch/>
+  <androidx.appstate.statestore/>
+  <androidx.appstate.transform/>
   <androidx.arch.core/>
   <androidx.asynclayoutinflater/>
   <androidx.autofill/>
@@ -158,6 +160,7 @@
   <androidx.wear.tiles/>
   <androidx.wear.watchface/>
   <androidx.wear.watchfacepush/>
+  <androidx.web/>
   <androidx.webgpu/>
   <androidx.webkit/>
   <androidx.window/>

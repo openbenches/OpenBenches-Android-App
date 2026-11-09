@@ -14,6 +14,7 @@ import org.osmdroid.views.MapView
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.infowindow.InfoWindow
 import org.openbenches.data.Bench
 import org.openbenches.data.TodoBench
 import org.openbenches.util.resolveUserLocation
@@ -22,17 +23,13 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.FusedLocationProviderClient
 import android.graphics.BitmapFactory
 import android.graphics.Point
 import android.graphics.drawable.BitmapDrawable
-import android.graphics.Bitmap
 import android.os.SystemClock
 import android.view.MotionEvent
 import org.osmdroid.events.MapListener
@@ -42,20 +39,18 @@ import org.osmdroid.views.CustomZoomButtonsController
 import androidx.compose.runtime.LaunchedEffect
 import org.osmdroid.util.BoundingBox
 import android.graphics.Color as AndroidColor
-import kotlin.math.sqrt
-import kotlin.math.sin
-import kotlin.math.cos
-import kotlin.math.atan2
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.graphics.scale
+import org.openbenches.R
 import kotlin.math.max
-import kotlin.math.pow
 
 private fun createBenchMarkerDrawable(context: Context): BitmapDrawable {
     val markerBitmapRaw = BitmapFactory.decodeResource(
         context.resources,
-        context.resources.getIdentifier("marker", "drawable", context.packageName),
+        R.drawable.marker,
     )
-    val markerBitmap = Bitmap.createScaledBitmap(markerBitmapRaw, 196, 128, true)
-    return BitmapDrawable(context.resources, markerBitmap)
+    val markerBitmap = markerBitmapRaw.scale(196, 128)
+    return markerBitmap.toDrawable(context.resources)
 }
 
 /** Expands a bench bounding box so markers sit inset from the map edges after zoom-to-fit. */
@@ -162,29 +157,30 @@ fun MapScreen(
     onVisibleBenchCountChanged: (Int) -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Reuse one scaled marker drawable across pan/zoom rebuilds (avoids decode+scale each time).
+    val benchMarkerDrawable = remember(context) { createBenchMarkerDrawable(context) }
     var userLocation by remember { mutableStateOf<GeoPoint?>(null) }
     var initialZoomSet by remember { mutableStateOf(false) }
-    var zoomLevel by remember { mutableStateOf(mapZoomLevel) }
+    var zoomLevel by remember { mutableDoubleStateOf(mapZoomLevel) }
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-    var lastBenchesHash by remember { mutableStateOf(0) }
-    var lastMarkerGenerationKey by remember { mutableStateOf(0) }
+    var lastBenchesHash by remember { mutableIntStateOf(0) }
+    var lastMarkerGenerationKey by remember { mutableIntStateOf(0) }
     /** Bumped when the map viewport pans so bench markers refresh for the visible area. */
-    var viewportPanKey by remember { mutableStateOf(0) }
-    var lastProcessedPanKey by remember { mutableStateOf(0) }
+    var viewportPanKey by remember { mutableIntStateOf(0) }
+    var lastProcessedPanKey by remember { mutableIntStateOf(0) }
     val scrollGenerationHolder = remember { intArrayOf(0) }
-    val useGlobalBenches = !globalBenches.isNullOrEmpty()
-    val useSearchFilter = !searchResultBenches.isNullOrEmpty()
     fun benchMarkerSource(): List<Bench> = when {
-        useSearchFilter -> searchResultBenches!!
-        useGlobalBenches -> globalBenches!!
+        // Non-null (including empty) means an active filter — e.g. To-Do view hides benches.
+        searchResultBenches != null -> searchResultBenches
+        !globalBenches.isNullOrEmpty() -> globalBenches
         else -> benches
     }
     var userMarker by remember { mutableStateOf<Marker?>(null) }
     var isRefreshingLocation by remember { mutableStateOf(false) }
-    var lastProcessedRecenterRequest by remember { mutableStateOf(0) }
-    var lastTodoMarkersKey by remember { mutableStateOf(0) }
-    var lastMapFocusRequest by remember { mutableStateOf(0) }
-    /** When true, map keeps recentering on the user ~every 0.5s until they pan/zoom/tap. */
+    var lastProcessedRecenterRequest by remember { mutableIntStateOf(0) }
+    var lastTodoMarkersKey by remember { mutableIntStateOf(0) }
+    var lastMapFocusRequest by remember { mutableIntStateOf(0) }
+    /** When true, map keeps re-centering on the user ~every 0.5s until they pan/zoom/tap. */
     var followingUserLocation by remember { mutableStateOf(false) }
     /** Ignore scroll/zoom cancel briefly after programmatic follow moves. */
     val ignoreFollowCancelUntilMs = remember { longArrayOf(0L) }
@@ -205,116 +201,9 @@ fun MapScreen(
 
     // Per-bench-id: true = first tap done (popup shown), waiting for second tap to open details.
     // Cleared when bench/cluster markers are rebuilt (createMarkers) so state never outlives real popups.
-    var markerClickStates by remember { mutableStateOf(mutableMapOf<Int, Boolean>()) }
-
-    /**
-     * Calculate distance between two points using Haversine formula
-     * Optimized version with better precision
-     */
-    fun calculateDistance(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
-        val r = 6371.0 // Earth's radius in kilometers
-        val dLat = Math.toRadians(lat2 - lat1)
-        val dLng = Math.toRadians(lng2 - lng1)
-        val a = sin(dLat / 2).pow(2) +
-                cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
-                sin(dLng / 2).pow(2)
-        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        return r * c
-    }
-
-    /**
-     * Enhanced clustering algorithm based on OpenBenches.org approach
-     * Uses a more efficient grid-based clustering for better performance
-     * Ensures isolated benches remain as individual markers for proper click handling
-     */
-    fun clusterBenchesByDistance(benches: List<Bench>, zoomLevel: Double): List<List<Bench>> {
-        if (benches.isEmpty()) return emptyList()
-        
-        // Determine cluster radius based on zoom level - larger radius for more zoomed out
-        val clusterRadiusKm = when {
-            zoomLevel < 8.0 -> 50.0   // Very zoomed out - 50km radius
-            zoomLevel < 10.0 -> 20.0  // Very zoomed out - 20km radius
-            zoomLevel < 12.0 -> 5.0   // Medium zoom - 5km radius
-            zoomLevel < 14.0 -> 1.0   // Lower zoom - 1km radius
-            zoomLevel < 15.0 -> 0.5   // Higher zoom - 500m radius
-            else -> 0.1               // Very zoomed in - 100m radius
-        }
-        
-        // Use grid-based clustering for better performance with large datasets
-        val gridSize = clusterRadiusKm / 111.0 // Approximate km per degree
-        val grid = mutableMapOf<String, MutableList<Bench>>()
-        
-        // Group benches by grid cell
-        benches.forEach { bench ->
-            val gridX = (bench.lng / gridSize).toInt()
-            val gridY = (bench.lat / gridSize).toInt()
-            val gridKey = "$gridX,$gridY"
-            
-            grid.getOrPut(gridKey) { mutableListOf() }.add(bench)
-        }
-        
-        val clusters = mutableListOf<MutableList<Bench>>()
-        
-        // Process each grid cell
-        grid.values.forEach { gridBenches ->
-            if (gridBenches.size == 1) {
-                // Single bench in grid cell - create individual cluster
-                clusters.add(mutableListOf(gridBenches.first()))
-            } else {
-                // Multiple benches - need to check distances within grid cell
-                val used = mutableSetOf<Int>()
-                
-                for (i in gridBenches.indices) {
-                    if (i in used) continue
-                    
-                    val currentBench = gridBenches[i]
-                    val cluster = mutableListOf<Bench>()
-                    cluster.add(currentBench)
-                    used.add(i)
-                    
-                    // Find all nearby benches within cluster radius
-                    for (j in i + 1 until gridBenches.size) {
-                        if (j in used) continue
-                        
-                        val otherBench = gridBenches[j]
-                        val distance = calculateDistance(
-                            currentBench.lat, currentBench.lng,
-                            otherBench.lat, otherBench.lng
-                        )
-                        
-                        if (distance <= clusterRadiusKm) {
-                            cluster.add(otherBench)
-                            used.add(j)
-                        }
-                    }
-                    
-                    // Only create cluster if there are multiple benches
-                    // If only one bench in cluster, treat as individual marker
-                    if (cluster.size > 1) {
-                        clusters.add(cluster)
-                    } else {
-                        // Single isolated bench - create individual cluster for proper click handling
-                        clusters.add(mutableListOf(cluster.first()))
-                    }
-                }
-            }
-        }
-        
-        return clusters
-    }
-
-    /**
-     * Helper function to find the bench ID for a given marker
-     */
-    fun findBenchIdForMarker(marker: Marker, mapView: MapView): Int? {
-        (marker.relatedObject as? Int)?.let { return it }
-        val title = marker.title
-        if (title != null && title.startsWith("Bench #")) {
-            val benchIdStr = title.substring(7) // Remove "Bench #" prefix
-            return benchIdStr.toIntOrNull()
-        }
-        return null
-    }
+    val markerClickStates = remember { mutableStateMapOf<Int, Boolean>() }
+    // One shared bubble for all bench markers — recreating per rebuild left orphan popups on the map.
+    var sharedBenchInfoWindow by remember { mutableStateOf<BenchMarkerInfoWindow?>(null) }
 
     /**
      * True if the tap lies on any [Marker] icon (bench, cluster, or user location).
@@ -332,24 +221,60 @@ fun MapScreen(
     }
 
     /**
+     * Closes every info window currently attached to the map (bench, cluster, orphans).
+     * Does not clear two-tap state — callers that need that should use dismissAllInfoWindows.
+     */
+    fun closeOpenInfoWindows(mapView: MapView) {
+        InfoWindow.closeAllInfoWindowsOn(mapView)
+        sharedBenchInfoWindow?.close()
+        // Defensive: close by marker reference in case a window was not tagged as a MapView child.
+        for (overlay in mapView.overlays) {
+            if (overlay is Marker) {
+                overlay.closeInfoWindow()
+            }
+        }
+        mapView.invalidate()
+    }
+
+    /**
+     * Closes every info window and resets two-tap popup state.
+     * Prefer this over [Marker.isInfoWindowShown], which is unreliable with shared windows.
+     */
+    fun dismissAllInfoWindows(mapView: MapView) {
+        closeOpenInfoWindows(mapView)
+        if (markerClickStates.isNotEmpty()) {
+            markerClickStates.clear()
+        }
+    }
+
+    /**
      * Clears currently open bench popups and any pending second-tap state.
      * Called when user taps the map background to "unselect" a bench.
      */
     fun clearBenchSelection(mapView: MapView) {
-        var changed = false
-        mapView.overlays.forEach { overlay ->
-            if (overlay is Marker && overlay != userMarker && overlay.isInfoWindowShown) {
-                overlay.closeInfoWindow()
-                changed = true
+        dismissAllInfoWindows(mapView)
+    }
+
+    fun benchInfoWindowFor(mapView: MapView): BenchMarkerInfoWindow {
+        val existing = sharedBenchInfoWindow
+        if (existing != null && existing.mapView === mapView) {
+            existing.onBenchClick = { benchId ->
+                stopFollowingUser()
+                markerClickStates[benchId] = false
+                closeOpenInfoWindows(mapView)
+                onBenchPopupClick(benchId)
             }
+            return existing
         }
-        if (markerClickStates.isNotEmpty()) {
-            markerClickStates.clear()
-            changed = true
+        existing?.close()
+        val created = BenchMarkerInfoWindow(mapView) { benchId ->
+            stopFollowingUser()
+            markerClickStates[benchId] = false
+            closeOpenInfoWindows(mapView)
+            onBenchPopupClick(benchId)
         }
-        if (changed) {
-            mapView.invalidate()
-        }
+        sharedBenchInfoWindow = created
+        return created
     }
 
     /**
@@ -362,15 +287,10 @@ fun MapScreen(
         markerDrawable: BitmapDrawable,
         context: Context
     ) {
-        // Bench/cluster markers are recreated; old popups are gone. Reset tap state so we never
-        // treat one tap as "second tap" after a refresh/rebuild.
-        markerClickStates.clear()
+        // Drop any leftover popups from a previous marker set before building a new one.
+        dismissAllInfoWindows(mapView)
         val clusterZoom = ViewportBenchClusterer.quantizeZoomForClustering(zoomLevel)
-        val benchInfoWindow = BenchMarkerInfoWindow(mapView) { benchId ->
-            stopFollowingUser()
-            markerClickStates[benchId] = false
-            onBenchPopupClick(benchId)
-        }
+        val benchInfoWindow = benchInfoWindowFor(mapView)
         clusters.forEach { cluster ->
             if (cluster.benches.size == 1) {
                 // Single bench - show individual marker
@@ -380,49 +300,28 @@ fun MapScreen(
                 marker.title = "Bench #${bench.id}"
                 marker.subDescription = bench.popupContent
                 marker.relatedObject = bench.id
+                // OverlayWithIW setter accepts any InfoWindow (shared across benches).
                 marker.infoWindow = benchInfoWindow
                 marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                 marker.icon = markerDrawable
                 marker.setOnMarkerClickListener { m, _ ->
                     stopFollowingUser()
-                    android.util.Log.d("MapScreen", "Marker clicked - Bench ID: ${bench.id}")
-                    
-                    // Close all other open popups first and reset their click states
-                    mapView.overlays.forEach { overlay ->
-                        if (overlay is Marker && overlay != m && overlay.isInfoWindowShown) {
-                            overlay.closeInfoWindow()
-                            // Reset click state for the closed marker
-                            val closedBenchId = findBenchIdForMarker(overlay, mapView)
-                            if (closedBenchId != null) {
-                                markerClickStates[closedBenchId] = false
-                                android.util.Log.d("MapScreen", "Reset click state for closed bench $closedBenchId")
-                            }
-                        }
-                    }
-                    
-                    // Use custom click tracking instead of relying on isInfoWindowShown
-                    val hasBeenClicked = markerClickStates[bench.id] ?: false
-                    android.util.Log.d("MapScreen", "Single bench marker click - Bench ID: ${bench.id}, Has been clicked: $hasBeenClicked")
-                    
+                    val hasBeenClicked = markerClickStates[bench.id] == true
                     if (!hasBeenClicked) {
-                        // First click - show popup and mark as clicked
-                        android.util.Log.d("MapScreen", "First click - showing popup for bench ${bench.id}")
+                        // Always close every open bubble first — only one popup at a time.
+                        closeOpenInfoWindows(mapView)
+                        markerClickStates.clear()
                         markerClickStates[bench.id] = true
                         m.showInfoWindow()
                     } else {
                         // Second click - navigate to bench details
-                        android.util.Log.d("MapScreen", "Second click - navigating to bench details for bench ${bench.id}")
-                        android.util.Log.d("MapScreen", "Calling onBenchPopupClick with bench ID: ${bench.id}")
-                        markerClickStates[bench.id] = false // Reset for next time
+                        markerClickStates[bench.id] = false
+                        closeOpenInfoWindows(mapView)
                         onBenchPopupClick(bench.id)
-                        android.util.Log.d("MapScreen", "onBenchPopupClick call completed for bench ID: ${bench.id}")
                     }
                     true // Consume the event to prevent map interaction
                 }
-                
-                // Verify click listener was attached
-                android.util.Log.d("MapScreen", "Click listener attached to marker for bench ${bench.id}")
-                
+
                 mapView.overlays.add(marker)
             } else {
                 // Multiple benches - marker at unweighted midpoint of merged sub-cells
@@ -433,41 +332,25 @@ fun MapScreen(
                 clusterMarker.title = "${cluster.benches.size} benches"
                 clusterMarker.subDescription = "Tap to zoom in and see individual benches"
                 clusterMarker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                
+
                 // Create cluster icon with count
                 val clusterIcon = createClusterIcon(cluster.benches.size, context, clusterZoom)
                 clusterMarker.icon = clusterIcon
-                
+
                 clusterMarker.setOnMarkerClickListener { m, _ ->
                     stopFollowingUser()
-                    // Close all other open popups first and reset their click states
-                    mapView.overlays.forEach { overlay ->
-                        if (overlay is Marker && overlay != m && overlay.isInfoWindowShown) {
-                            overlay.closeInfoWindow()
-                            // Reset click state for the closed marker
-                            val closedBenchId = findBenchIdForMarker(overlay, mapView)
-                            if (closedBenchId != null) {
-                                markerClickStates[closedBenchId] = false
-                                android.util.Log.d("MapScreen", "Reset click state for closed bench $closedBenchId")
-                            }
-                        }
-                    }
-                    
-                    // Check if this marker already has an open info window
-                    val hasOpenWindow = m.isInfoWindowShown
-                    if (!hasOpenWindow) {
-                        // First click - show popup
+                    val alreadyOpenForThis = m.isInfoWindowShown
+                    // Close every other bubble (including bench popups) before opening/acting.
+                    closeOpenInfoWindows(mapView)
+                    markerClickStates.clear()
+                    if (!alreadyOpenForThis) {
                         m.showInfoWindow()
                     } else {
-                        // Second click - navigate to bench details for the first bench in the cluster
                         onBenchPopupClick(cluster.benches.first().id)
                     }
                     true // Consume the event to prevent map interaction
                 }
-                
-                // Verify click listener was attached
-                android.util.Log.d("MapScreen", "Click listener attached to cluster marker for ${cluster.benches.size} benches")
-                
+
                 mapView.overlays.add(clusterMarker)
             }
         }
@@ -507,32 +390,41 @@ fun MapScreen(
         onRefreshLocationHandled()
     }
 
-    LaunchedEffect(zoomToFitBenches, benches, globalBenches, searchResultBenches, mapProvider) {
+    LaunchedEffect(zoomToFitBenches, benches, globalBenches, searchResultBenches, todoBenches, mapProvider) {
+        if (!zoomToFitBenches) return@LaunchedEffect
         val fitBenches = benchMarkerSource()
-        if (zoomToFitBenches && fitBenches.isNotEmpty()) {
-            stopFollowingUser()
-            val lats = fitBenches.map { it.lat }
-            val lngs = fitBenches.map { it.lng }
-            val north = lats.maxOrNull() ?: 0.0
-            val south = lats.minOrNull() ?: 0.0
-            val east = lngs.maxOrNull() ?: 0.0
-            val west = lngs.minOrNull() ?: 0.0
-            
-            mapViewRef?.post {
-                if (fitBenches.size == 1) {
-                    // For single bench, center on it with a reasonable zoom level (not maximum)
-                    val bench = fitBenches.first()
-                    mapViewRef?.controller?.setCenter(GeoPoint(bench.lat, bench.lng))
-                    mapViewRef?.controller?.setZoom(16.0) // Reasonable zoom level for single bench
-                } else {
-                    val mapView = mapViewRef ?: return@post
-                    val bbox = boundingBoxAroundBenches(north, south, east, west)
-                    val borderPx = (72 * mapView.context.resources.displayMetrics.density).toInt()
-                    mapView.zoomToBoundingBox(bbox, true, borderPx)
-                }
-            }
-            onZoomToFitHandled()
+        val fitPoints: List<Pair<Double, Double>> = when {
+            fitBenches.isNotEmpty() -> fitBenches.map { it.lat to it.lng }
+            // To-Do list filter: no bench markers, fit the exclamation markers instead.
+            searchResultBenches != null && todoBenches.isNotEmpty() ->
+                todoBenches.map { it.latitude to it.longitude }
+            else -> emptyList()
         }
+        if (fitPoints.isEmpty()) {
+            onZoomToFitHandled()
+            return@LaunchedEffect
+        }
+        stopFollowingUser()
+        val lats = fitPoints.map { it.first }
+        val lngs = fitPoints.map { it.second }
+        val north = lats.maxOrNull() ?: 0.0
+        val south = lats.minOrNull() ?: 0.0
+        val east = lngs.maxOrNull() ?: 0.0
+        val west = lngs.minOrNull() ?: 0.0
+
+        mapViewRef?.post {
+            if (fitPoints.size == 1) {
+                val (lat, lng) = fitPoints.first()
+                mapViewRef?.controller?.setCenter(GeoPoint(lat, lng))
+                mapViewRef?.controller?.setZoom(16.0)
+            } else {
+                val mapView = mapViewRef ?: return@post
+                val bbox = boundingBoxAroundBenches(north, south, east, west)
+                val borderPx = (72 * mapView.context.resources.displayMetrics.density).toInt()
+                mapView.zoomToBoundingBox(bbox, true, borderPx)
+            }
+        }
+        onZoomToFitHandled()
     }
 
     fun markerGenerationKey(mapView: MapView): Int {
@@ -580,10 +472,15 @@ fun MapScreen(
     }
 
     fun rebuildBenchMarkers(mapView: MapView, markerDrawable: BitmapDrawable) {
+        // Close popups before removing markers — removeAll does not detach InfoWindows.
+        dismissAllInfoWindows(mapView)
         val overlaysToRemove = mapView.overlays.filter { overlay ->
             overlay is Marker &&
                 overlay != userMarker &&
                 !isTodoMarker(overlay)
+        }
+        for (overlay in overlaysToRemove) {
+            (overlay as? Marker)?.closeInfoWindow()
         }
         mapView.overlays.removeAll(overlaysToRemove)
 
@@ -607,6 +504,7 @@ fun MapScreen(
             marker.icon = icon
             marker.setOnMarkerClickListener { _, _ ->
                 stopFollowingUser()
+                dismissAllInfoWindows(mapView)
                 onTodoClick(todo)
                 true
             }
@@ -625,7 +523,7 @@ fun MapScreen(
         val mapView = mapViewRef ?: return@LaunchedEffect
         mapView.post {
             val currentMapView = mapViewRef ?: return@post
-            rebuildBenchMarkers(currentMapView, createBenchMarkerDrawable(currentMapView.context))
+            rebuildBenchMarkers(currentMapView, benchMarkerDrawable)
             syncTodoMarkers(currentMapView)
             val generationKey = markerGenerationKey(currentMapView)
             lastMarkerGenerationKey = generationKey
@@ -797,14 +695,13 @@ fun MapScreen(
                     mapView.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                     
                     // Set tile overlay options for better performance
-                    mapView.overlayManager.tilesOverlay?.setLoadingBackgroundColor(AndroidColor.TRANSPARENT)
-                    mapView.overlayManager.tilesOverlay?.setLoadingLineColor(AndroidColor.TRANSPARENT)
-                    val center = mapCenter
+                    mapView.overlayManager.tilesOverlay?.loadingBackgroundColor = AndroidColor.TRANSPARENT
+                    mapView.overlayManager.tilesOverlay?.loadingLineColor = AndroidColor.TRANSPARENT
                     if (!initialZoomSet) {
                         mapView.controller.setZoom(zoomLevel)
                         initialZoomSet = true
                     }
-                    mapView.controller.setCenter(center)
+                    mapView.controller.setCenter(mapCenter)
                     
                     // Create user marker if location is available
                     if (userLocation != null) {
@@ -816,13 +713,10 @@ fun MapScreen(
                         userMarker = newUserMarker
                     }
                     
-                    // Create bench markers with clustering - fixed size for consistent click area
-                    val markerDrawable = createBenchMarkerDrawable(ctx)
-                    
                     // Create markers with a slight delay to ensure map view is fully initialized
                     mapView.post {
                         mapView.postDelayed({
-                            rebuildBenchMarkers(mapView, markerDrawable)
+                            rebuildBenchMarkers(mapView, benchMarkerDrawable)
                             syncTodoMarkers(mapView)
                             val initialKey = markerGenerationKey(mapView)
                             lastMarkerGenerationKey = initialKey
@@ -837,7 +731,7 @@ fun MapScreen(
                     // Use the newer MapListener API instead of deprecated setMapListener
                     mapView.addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
-                            val mapView = event?.source as? MapView ?: return true
+                            val mapView = event?.source ?: return true
                             if (shouldCancelFollowFromUserGesture()) {
                                 stopFollowingUser()
                             }
@@ -858,14 +752,13 @@ fun MapScreen(
                             return true
                         }
                     })
-                    // Background taps: use MapEventsOverlay at the bottom of the stack so it receives taps
-                    // not consumed by markers. (Plain Overlay.onSingleTapConfirmed was not reliably invoked.)
+                    // Background taps dismiss the open popup. Placed at index 0 so markers (later in the
+                    // list) receive the tap first; if no marker consumes it, this closes any bubble.
                     mapView.overlays.add(
                         0,
                         MapEventsOverlay(
                             object : MapEventsReceiver {
                                 override fun singleTapConfirmedHelper(p: GeoPoint): Boolean {
-                                    android.util.Log.d("MapScreen", "MapEvents singleTap at $p")
                                     val point = Point()
                                     mapView.projection.toPixels(p, point)
                                     val me = MotionEvent.obtain(
@@ -878,12 +771,10 @@ fun MapScreen(
                                     )
                                     return try {
                                         if (tapHitsAnyMarker(mapView, me)) {
-                                            android.util.Log.d("MapScreen", "Tap on marker hit area, skip clear")
                                             false
                                         } else {
                                             stopFollowingUser()
                                             clearBenchSelection(mapView)
-                                            android.util.Log.d("MapScreen", "Background tap — cleared bench selection")
                                             false
                                         }
                                     } finally {
@@ -919,7 +810,7 @@ fun MapScreen(
                         currentBenchesHash != lastBenchesHash ||
                         panTrigger != lastProcessedPanKey
                     ) {
-                        rebuildBenchMarkers(mapView, createBenchMarkerDrawable(mapView.context))
+                        rebuildBenchMarkers(mapView, benchMarkerDrawable)
                         syncTodoMarkers(mapView)
                         lastMarkerGenerationKey = generationKey
                         lastProcessedPanKey = panTrigger

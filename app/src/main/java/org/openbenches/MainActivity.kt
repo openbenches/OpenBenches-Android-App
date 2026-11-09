@@ -2,14 +2,18 @@ package org.openbenches
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.ui.graphics.toArgb
+import org.openbenches.ui.theme.OpenBenchesBlack
 import org.openbenches.ui.theme.OpenBenchesCream
+import org.openbenches.ui.theme.OpenBenchesDarkBackground
 import org.openbenches.ui.theme.OpenBenchesSkyBlue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,12 +28,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.tooling.preview.Preview
 import org.openbenches.ui.theme.OpenBenchesTheme
+import org.openbenches.ui.theme.openBenchesLinkColor
 import androidx.compose.material3.Surface
 import org.openbenches.ui.MapScreen
-import androidx.compose.material3.BottomAppBar
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.annotation.DrawableRes
-import org.openbenches.R
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,22 +40,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.isGranted
 import android.Manifest
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -82,7 +87,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.text.font.FontWeight
 import java.text.NumberFormat
 import java.util.Locale
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.BorderStroke
 import org.openbenches.ui.theme.OpenBenchesHeaderBanner
@@ -99,6 +103,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.TextButton
 import android.content.Intent
 import android.net.Uri
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import android.content.res.Configuration
@@ -118,7 +124,6 @@ import org.openbenches.ui.ColophonScreen
 import org.openbenches.data.PendingBenchUploadStore
 import org.openbenches.data.TodoBench
 import org.openbenches.data.TodoBenchStore
-import org.openbenches.ui.TodoBenchesScreen
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.size
@@ -143,24 +148,47 @@ import coil.compose.AsyncImage
 
 @OptIn(
     ExperimentalMaterial3Api::class,
-    com.google.accompanist.permissions.ExperimentalPermissionsApi::class
+    ExperimentalPermissionsApi::class,
 )
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(
-                OpenBenchesSkyBlue.toArgb(),
-                OpenBenchesSkyBlue.toArgb(),
-            ),
-            navigationBarStyle = SystemBarStyle.light(
-                OpenBenchesCream.toArgb(),
-                OpenBenchesCream.toArgb(),
-            ),
-        )
         setContent {
-            OpenBenchesTheme {
-                var recenterRequest by remember { mutableStateOf(0) }
+            val mapPrefs = remember {
+                getSharedPreferences("app_settings", MODE_PRIVATE)
+            }
+            var darkMode by remember {
+                mutableStateOf(mapPrefs.getBoolean("dark_mode", false))
+            }
+            fun setDarkMode(enabled: Boolean) {
+                darkMode = enabled
+                mapPrefs.edit { putBoolean("dark_mode", enabled) }
+            }
+            SideEffect {
+                if (darkMode) {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.dark(
+                            OpenBenchesDarkBackground.toArgb(),
+                        ),
+                        navigationBarStyle = SystemBarStyle.dark(
+                            OpenBenchesDarkBackground.toArgb(),
+                        ),
+                    )
+                } else {
+                    enableEdgeToEdge(
+                        statusBarStyle = SystemBarStyle.light(
+                            OpenBenchesSkyBlue.toArgb(),
+                            OpenBenchesSkyBlue.toArgb(),
+                        ),
+                        navigationBarStyle = SystemBarStyle.light(
+                            OpenBenchesCream.toArgb(),
+                            OpenBenchesCream.toArgb(),
+                        ),
+                    )
+                }
+            }
+            OpenBenchesTheme(darkTheme = darkMode) {
+                var recenterRequest by remember { mutableIntStateOf(0) }
                 var refreshLocation by remember { mutableStateOf(false) }
                 val nearbyBenchRadiusKm = 10
                 val snackbarHostState = remember { SnackbarHostState() }
@@ -173,9 +201,6 @@ class MainActivity : ComponentActivity() {
                 }
                 val authPrefs = remember {
                     this@MainActivity.getSharedPreferences("auth_session", MODE_PRIVATE)
-                }
-                val mapPrefs = remember {
-                    getSharedPreferences("app_settings", MODE_PRIVATE)
                 }
                 @OptIn(ExperimentalPermissionsApi::class)
                 val locationPermissionState = rememberPermissionState(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -193,19 +218,23 @@ class MainActivity : ComponentActivity() {
                 var showLoginScreen by remember { mutableStateOf(false) }
                 var showAccountDetails by remember { mutableStateOf(false) }
                 var showPendingUploads by remember { mutableStateOf(false) }
-                var showTodoBenches by remember { mutableStateOf(false) }
                 val pendingUploadStore = remember { PendingBenchUploadStore(this@MainActivity) }
-                var pendingUploadCount by remember { mutableStateOf(pendingUploadStore.count()) }
+                var pendingUploadCount by remember { mutableIntStateOf(pendingUploadStore.count()) }
                 val todoBenchStore = remember { TodoBenchStore(this@MainActivity) }
                 var todoBenches by remember { mutableStateOf(todoBenchStore.list()) }
                 var todoPendingDelete by remember { mutableStateOf<TodoBench?>(null) }
+                /** When true, [searchResultBenches] is the To-Do list shown like a search filter. */
+                var todoListFilterActive by remember { mutableStateOf(false) }
 
                 fun refreshPendingUploadCount() {
                     pendingUploadCount = pendingUploadStore.count()
                 }
 
+                // Filled after searchResultBenches exists so refresh can update the map filter.
+                val syncTodoListMapFilter = remember { arrayOf({}) }
                 fun refreshTodoBenches() {
                     todoBenches = todoBenchStore.list()
+                    syncTodoListMapFilter[0]()
                 }
                 var showClearTodoConfirm by remember { mutableStateOf(false) }
                 val downloadTodoListLauncher = rememberLauncherForActivityResult(
@@ -262,19 +291,19 @@ class MainActivity : ComponentActivity() {
 
                 fun setMapProvider(provider: MapProvider) {
                     mapProvider = provider
-                    mapPrefs.edit().putString("map_provider", provider.name).apply()
+                    mapPrefs.edit { putString("map_provider", provider.name) }
                 }
                 var showBenchDetails by rememberSaveable { mutableStateOf(false) }
-                var selectedBenchId by rememberSaveable { mutableStateOf(-1) }
+                var selectedBenchId by rememberSaveable { mutableIntStateOf(-1) }
                 var showEditBenchScreen by rememberSaveable { mutableStateOf(false) }
-                var benchDetailsRefreshKey by rememberSaveable { mutableStateOf(0) }
+                var benchDetailsRefreshKey by rememberSaveable { mutableIntStateOf(0) }
                 var showSearchDialog by remember { mutableStateOf(false) }
                 var showOfflineBenchDialog by remember { mutableStateOf(false) }
                 var searchText by remember { mutableStateOf("") }
                 var searchResultBenches by remember { mutableStateOf<List<org.openbenches.data.Bench>?>(null) }
                 var zoomToFitBenches by remember { mutableStateOf(false) }
-                var mapZoomLevel by remember { mutableStateOf(11.0) }
-                var mapFocusRequest by remember { mutableStateOf(0) }
+                var mapZoomLevel by remember { mutableDoubleStateOf(11.0) }
+                var mapFocusRequest by remember { mutableIntStateOf(0) }
                 var showAddBenchScreen by rememberSaveable { mutableStateOf(false) }
                 var editingPendingId by remember { mutableStateOf<String?>(null) }
                 var authToken by rememberSaveable { mutableStateOf<String?>(null) }
@@ -288,9 +317,8 @@ class MainActivity : ComponentActivity() {
                 var globalBenchesLoading by remember { mutableStateOf(false) }
                 var globalBenchesReady by remember { mutableStateOf(false) }
                 var usingOfflineBenchData by remember { mutableStateOf(false) }
-                var visibleBenchCount by remember { mutableStateOf(0) }
+                var visibleBenchCount by remember { mutableIntStateOf(0) }
                 val isDeviceOffline = rememberDeviceOffline()
-                val showOfflineMapChip = isDeviceOffline
 
                 fun fetchBenchesForCenter(center: GeoPoint) {
                     if (!globalBenches.isNullOrEmpty()) return
@@ -310,6 +338,37 @@ class MainActivity : ComponentActivity() {
                             }
                         } finally {
                             loading = false
+                        }
+                    }
+                }
+
+                fun clearMapSearchFilter() {
+                    searchResultBenches = null
+                    todoListFilterActive = false
+                    mapCenter?.let { fetchBenchesForCenter(it) }
+                }
+
+                fun showTodoListOnMap() {
+                    val todos = todoBenchStore.list()
+                    todoBenches = todos
+                    if (todos.isEmpty()) {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("To-Do list is empty.")
+                        }
+                        return
+                    }
+                    // Empty non-null search filter hides bench icons; To-Do markers stay as usual.
+                    searchResultBenches = emptyList()
+                    todoListFilterActive = true
+                    zoomToFitBenches = true
+                }
+
+                syncTodoListMapFilter[0] = {
+                    if (todoListFilterActive) {
+                        if (todoBenches.isEmpty()) {
+                            clearMapSearchFilter()
+                        } else {
+                            searchResultBenches = emptyList()
                         }
                     }
                 }
@@ -408,7 +467,7 @@ class MainActivity : ComponentActivity() {
                         authPictureUrl = savedPictureUrl
                         authExpiresAtMs = expiresAtMs
                         if (expiresAtMs != null && expiresAtMs != savedExpiresAt) {
-                            authPrefs.edit().putLong("expiresAtMs", expiresAtMs).apply()
+                            authPrefs.edit { putLong("expiresAtMs", expiresAtMs) }
                         }
                     } else {
                         authToken = null
@@ -416,7 +475,7 @@ class MainActivity : ComponentActivity() {
                         authProvider = null
                         authPictureUrl = null
                         authExpiresAtMs = null
-                        authPrefs.edit().clear().apply()
+                        authPrefs.edit { clear() }
                     }
                 }
 
@@ -453,8 +512,35 @@ class MainActivity : ComponentActivity() {
                     !showLoginScreen &&
                     !showLeaderboardBenches &&
                     !showAccountDetails &&
-                    !showPendingUploads &&
-                    !showTodoBenches
+                    !showPendingUploads
+
+                // System back: match OpenBenches header / in-app back; on the map, do nothing.
+                BackHandler {
+                    if (onMapScreen) return@BackHandler
+                    when {
+                        showEditBenchScreen -> showEditBenchScreen = false
+                        showBenchDetails && selectedBenchId != -1 -> {
+                            showBenchDetails = false
+                            selectedBenchId = -1
+                            showEditBenchScreen = false
+                        }
+                        showPendingUploads -> showPendingUploads = false
+                        showAddBenchScreen -> {
+                            showAddBenchScreen = false
+                            if (editingPendingId != null) {
+                                showPendingUploads = true
+                            }
+                            editingPendingId = null
+                        }
+                        showLoginScreen -> showLoginScreen = false
+                        showAccountDetails -> showAccountDetails = false
+                        showAboutDialog -> showAboutDialog = false
+                        showTermsScreen -> showTermsScreen = false
+                        showSupportScreen -> showSupportScreen = false
+                        showColophonScreen -> showColophonScreen = false
+                        showLeaderboardBenches -> showLeaderboardBenches = false
+                    }
+                }
 
                 Scaffold(
                     containerColor = MaterialTheme.colorScheme.background,
@@ -470,6 +556,7 @@ class MainActivity : ComponentActivity() {
                             val globalLoaded = globalBenches?.size ?: 0
                             val searchMatchCount = searchResultBenches?.size ?: 0
                             val shown = when {
+                                todoListFilterActive -> todoBenches.size
                                 searchMatchCount > 0 -> visibleBenchCount
                                 globalLoaded > 0 -> visibleBenchCount
                                 else -> benches.size
@@ -477,6 +564,13 @@ class MainActivity : ComponentActivity() {
                             val shownPart =
                                 NumberFormat.getNumberInstance(Locale.getDefault()).format(shown)
                             val mapStatusLine = when {
+                                todoListFilterActive -> {
+                                    if (todoBenches.size == 1) {
+                                        "To-Do: 1 location on map"
+                                    } else {
+                                        "To-Do: $shownPart locations on map"
+                                    }
+                                }
                                 searchMatchCount > 0 -> {
                                     val matchPart = NumberFormat.getNumberInstance(Locale.getDefault())
                                         .format(searchMatchCount)
@@ -488,9 +582,9 @@ class MainActivity : ComponentActivity() {
                                 }
                                 globalBenchesLoading && globalLoaded == 0 ->
                                     "Loading all benches…"
-                                showOfflineMapChip && globalLoaded == 0 ->
+                                isDeviceOffline && globalLoaded == 0 ->
                                     "No internet — benches need one online download"
-                                showOfflineMapChip && globalLoaded > 0 ->
+                                isDeviceOffline ->
                                     if (shown == 1) {
                                         "Showing $shownPart bench on map (offline data)"
                                     } else {
@@ -519,9 +613,12 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     bottomBar = {
-                        BottomAppBar(
-                            modifier = Modifier.height(28.dp)
-                        ) {}
+                        // Reserve a slim bottom inset (replaces an empty BottomAppBar).
+                        Spacer(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(28.dp),
+                        )
                     },
                     snackbarHost = { }
                 ) { innerPadding ->
@@ -535,24 +632,8 @@ class MainActivity : ComponentActivity() {
                                     showAddBenchScreen = true
                                 },
                                 authToken = authToken,
-                                onPendingChanged = { refreshPendingUploadCount() }
-                            )
-                        } else if (showTodoBenches) {
-                            TodoBenchesScreen(
-                                onBack = { showTodoBenches = false },
-                                onShowOnMap = { todo ->
-                                    mapCenter = GeoPoint(todo.latitude, todo.longitude)
-                                    mapZoomLevel = 17.0
-                                    mapFocusRequest++
-                                    showTodoBenches = false
-                                },
-                                onTodosChanged = { refreshTodoBenches() },
-                                globalBenchCount = globalBenchCount,
-                                globalBenchCountFailed = globalBenchCountFailed,
-                                authToken = authToken,
-                                authProvider = authProvider,
-                                authPictureUrl = authPictureUrl,
                                 authUsername = authUsername,
+                                onPendingChanged = { refreshPendingUploadCount() }
                             )
                         } else if (showAddBenchScreen) {
                             androidx.compose.runtime.key(editingPendingId ?: "new") {
@@ -565,6 +646,7 @@ class MainActivity : ComponentActivity() {
                                     editingPendingId = null
                                 },
                                 authToken = authToken,
+                                authUsername = authUsername,
                                 editingPendingId = editingPendingId,
                                 onPendingUploadsChanged = { refreshPendingUploadCount() },
                                 mapProvider = mapProvider,
@@ -585,19 +667,17 @@ class MainActivity : ComponentActivity() {
                                     authProvider = provider
                                     authPictureUrl = pictureUrl
                                     authExpiresAtMs = expiresAtMs
-                                    authPrefs.edit()
-                                        .putString("token", token)
-                                        .putString("username", username)
-                                        .putString("provider", provider)
-                                        .putString("pictureUrl", pictureUrl)
-                                        .apply {
-                                            if (expiresAtMs != null) {
-                                                putLong("expiresAtMs", expiresAtMs)
-                                            } else {
-                                                remove("expiresAtMs")
-                                            }
+                                    authPrefs.edit {
+                                        putString("token", token)
+                                        putString("username", username)
+                                        putString("provider", provider)
+                                        putString("pictureUrl", pictureUrl)
+                                        if (expiresAtMs != null) {
+                                            putLong("expiresAtMs", expiresAtMs)
+                                        } else {
+                                            remove("expiresAtMs")
                                         }
-                                        .apply()
+                                    }
                                     showLoginScreen = false
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar(
@@ -677,6 +757,7 @@ class MainActivity : ComponentActivity() {
                                             error = null
                                             try {
                                                 val results = fetchBenchesForUser(uid)
+                                                todoListFilterActive = false
                                                 if (results.isEmpty()) {
                                                     searchResultBenches = null
                                                     snackbarHostState.showSnackbar(
@@ -718,7 +799,7 @@ class MainActivity : ComponentActivity() {
                                 shadowElevation = 4.dp,
                                 border = BorderStroke(
                                     width = 4.dp,
-                                    color = MaterialTheme.colorScheme.tertiary,
+                                    color = OpenBenchesBlack,
                                 ),
                             ) {
                                 Box(modifier = Modifier.fillMaxSize()) {
@@ -726,11 +807,11 @@ class MainActivity : ComponentActivity() {
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .clip(OpenBenchesHeaderShape),
-                                    contentAlignment = Alignment.Center,
+                                    contentAlignment = Center,
                                 ) {
                                     val center = mapCenter
                                     if (center == null) {
-                                        androidx.compose.material3.CircularProgressIndicator()
+                                        CircularProgressIndicator()
                                     } else {
                                     MapScreen(
                                         modifier = Modifier.fillMaxSize(),
@@ -744,7 +825,7 @@ class MainActivity : ComponentActivity() {
                                         setMapCenter = { mapCenter = it },
                                         mapProvider = mapProvider,
                                         onBenchPopupClick = { benchId ->
-                                            if (showOfflineMapChip) {
+                                            if (isDeviceOffline) {
                                                 showOfflineBenchDialog = true
                                             } else {
                                                 selectedBenchId = benchId
@@ -792,7 +873,7 @@ class MainActivity : ComponentActivity() {
                                         mapProvider = mapProvider,
                                         onMapProviderSelected = { setMapProvider(it) },
                                     )
-                                    if (showOfflineMapChip) {
+                                    if (isDeviceOffline) {
                                         OpenBenchesOfflineMapChip()
                                     }
                                 }
@@ -838,6 +919,16 @@ class MainActivity : ComponentActivity() {
                                             todoListMenuExpanded = false
                                             showAboutDialog = true
                                         })
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(if (darkMode) "Light mode" else "Dark mode")
+                                            },
+                                            onClick = {
+                                                menuExpanded = false
+                                                todoListMenuExpanded = false
+                                                setDarkMode(!darkMode)
+                                            },
+                                        )
                                         if (authToken.isNullOrBlank()) {
                                             DropdownMenuItem(
                                                 text = { Text("Login") },
@@ -845,53 +936,52 @@ class MainActivity : ComponentActivity() {
                                                     menuExpanded = false
                                                     showLoginScreen = true
                                                 },
-                                                enabled = !showOfflineMapChip,
+                                                enabled = !isDeviceOffline,
                                             )
                                         } else {
                                             DropdownMenuItem(
                                                 text = { Text("Logout") },
                                                 onClick = {
-                                                menuExpanded = false
-                                                coroutineScope.launch {
-                                                    withContext(Dispatchers.IO) {
-                                                        warmCustomTabs(applicationContext)
-                                                    }
-                                                    WebAuthProvider.logout(auth0Client)
-                                                        .withScheme(BuildConfig.AUTH0_SCHEME)
-                                                        .start(
-                                                            this@MainActivity,
-                                                            object : Callback<Void?, AuthenticationException> {
-                                                                override fun onSuccess(result: Void?) {
-                                                                    authToken = null
-                                                                    authUsername = null
-                                                                    authProvider = null
-                                                                    authPictureUrl = null
-                                                                    authExpiresAtMs = null
-                                                                    authPrefs.edit().clear().apply()
-                                                                    coroutineScope.launch {
-                                                                        snackbarHostState.showSnackbar("Logged out.")
+                                                    menuExpanded = false
+                                                    coroutineScope.launch {
+                                                        withContext(Dispatchers.IO) {
+                                                            warmCustomTabs(applicationContext)
+                                                        }
+                                                        WebAuthProvider.logout(auth0Client)
+                                                            .withScheme(BuildConfig.AUTH0_SCHEME)
+                                                            .start(
+                                                                this@MainActivity,
+                                                                object : Callback<Void?, AuthenticationException> {
+                                                                    override fun onSuccess(result: Void?) {
+                                                                        authToken = null
+                                                                        authUsername = null
+                                                                        authProvider = null
+                                                                        authPictureUrl = null
+                                                                        authExpiresAtMs = null
+                                                                        authPrefs.edit { clear() }
+                                                                        coroutineScope.launch {
+                                                                            snackbarHostState.showSnackbar("Logged out.")
+                                                                        }
                                                                     }
-                                                                }
 
-                                                                override fun onFailure(error: AuthenticationException) {
-                                                                    // Even if browser session logout fails, clear local app session.
-                                                                    authToken = null
-                                                                    authUsername = null
-                                                                    authProvider = null
-                                                                    authPictureUrl = null
-                                                                    authExpiresAtMs = null
-                                                                    authPrefs.edit().clear().apply()
-                                                                    coroutineScope.launch {
-                                                                        snackbarHostState.showSnackbar(
-                                                                            "Logged out locally."
-                                                                        )
+                                                                    override fun onFailure(error: AuthenticationException) {
+                                                                        authToken = null
+                                                                        authUsername = null
+                                                                        authProvider = null
+                                                                        authPictureUrl = null
+                                                                        authExpiresAtMs = null
+                                                                        authPrefs.edit { clear() }
+                                                                        coroutineScope.launch {
+                                                                            snackbarHostState.showSnackbar(
+                                                                                "Logged out locally."
+                                                                            )
+                                                                        }
                                                                     }
                                                                 }
-                                                            }
-                                                        )
-                                                }
-                                            },
-                                                enabled = !showOfflineMapChip,
+                                                            )
+                                                    }
+                                                },
+                                                enabled = !isDeviceOffline,
                                             )
                                             DropdownMenuItem(
                                                 text = { Text("Account details") },
@@ -909,85 +999,73 @@ class MainActivity : ComponentActivity() {
                                             menuExpanded = false
                                             showSupportScreen = true
                                         })
-                                        Box {
-                                            var todoMenuItemWidthPx by remember { mutableStateOf(0) }
-                                            val density = LocalDensity.current
+                                        DropdownMenuItem(
+                                            text = { Text("To-Do list") },
+                                            onClick = {
+                                                todoListMenuExpanded = !todoListMenuExpanded
+                                            },
+                                            trailingIcon = {
+                                                Icon(
+                                                    imageVector = if (todoListMenuExpanded) {
+                                                        Icons.Filled.KeyboardArrowUp
+                                                    } else {
+                                                        Icons.Filled.KeyboardArrowDown
+                                                    },
+                                                    contentDescription = "To-Do list options",
+                                                )
+                                            },
+                                        )
+                                        if (todoListMenuExpanded) {
                                             DropdownMenuItem(
-                                                text = { Text("To-Do list") },
+                                                text = { Text("View To-Do list") },
                                                 onClick = {
-                                                    todoListMenuExpanded = !todoListMenuExpanded
-                                                },
-                                                trailingIcon = {
-                                                    Icon(
-                                                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                                                        contentDescription = "To-Do list options",
-                                                    )
-                                                },
-                                                modifier = Modifier.onGloballyPositioned { coords ->
-                                                    todoMenuItemWidthPx = coords.size.width
+                                                    menuExpanded = false
+                                                    todoListMenuExpanded = false
+                                                    showTodoListOnMap()
                                                 },
                                             )
-                                            DropdownMenu(
-                                                expanded = todoListMenuExpanded,
-                                                onDismissRequest = { todoListMenuExpanded = false },
-                                                offset = with(density) {
-                                                    DpOffset(
-                                                        x = todoMenuItemWidthPx.toDp(),
-                                                        y = (-48).dp,
+                                            DropdownMenuItem(
+                                                text = { Text("Clear To-Do list") },
+                                                onClick = {
+                                                    menuExpanded = false
+                                                    todoListMenuExpanded = false
+                                                    showClearTodoConfirm = true
+                                                },
+                                                enabled = todoBenches.isNotEmpty(),
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Load To-Do list") },
+                                                onClick = {
+                                                    menuExpanded = false
+                                                    todoListMenuExpanded = false
+                                                    uploadTodoListLauncher.launch(
+                                                        arrayOf(
+                                                            "application/json",
+                                                            "text/*",
+                                                            "*/*",
+                                                        ),
                                                     )
                                                 },
-                                            ) {
-                                                DropdownMenuItem(
-                                                    text = { Text("View To-Do list") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        todoListMenuExpanded = false
-                                                        showTodoBenches = true
-                                                    },
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("Clear To-Do list") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        todoListMenuExpanded = false
-                                                        showClearTodoConfirm = true
-                                                    },
-                                                    enabled = todoBenches.isNotEmpty(),
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("Upload To-Do list") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        todoListMenuExpanded = false
-                                                        uploadTodoListLauncher.launch(
-                                                            arrayOf(
-                                                                "application/json",
-                                                                "text/*",
-                                                                "*/*",
-                                                            ),
-                                                        )
-                                                    },
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("Download To-Do list") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        todoListMenuExpanded = false
-                                                        if (todoBenches.isEmpty()) {
-                                                            coroutineScope.launch {
-                                                                snackbarHostState.showSnackbar(
-                                                                    "To-Do list is empty.",
-                                                                )
-                                                            }
-                                                        } else {
-                                                            downloadTodoListLauncher.launch(
-                                                                "openbenches-todo-list.json",
+                                            )
+                                            DropdownMenuItem(
+                                                text = { Text("Save To-Do list") },
+                                                onClick = {
+                                                    menuExpanded = false
+                                                    todoListMenuExpanded = false
+                                                    if (todoBenches.isEmpty()) {
+                                                        coroutineScope.launch {
+                                                            snackbarHostState.showSnackbar(
+                                                                "To-Do list is empty.",
                                                             )
                                                         }
-                                                    },
-                                                    enabled = todoBenches.isNotEmpty(),
-                                                )
-                                            }
+                                                    } else {
+                                                        downloadTodoListLauncher.launch(
+                                                            "openbenches-todo-list.json",
+                                                        )
+                                                    }
+                                                },
+                                                enabled = todoBenches.isNotEmpty(),
+                                            )
                                         }
                                         DropdownMenuItem(
                                             text = { Text("Contributors Leaderboard") },
@@ -996,7 +1074,7 @@ class MainActivity : ComponentActivity() {
                                                 todoListMenuExpanded = false
                                                 showLeaderboardBenches = true
                                             },
-                                            enabled = !showOfflineMapChip,
+                                            enabled = !isDeviceOffline,
                                         )
                                         DropdownMenuItem(text = { Text("Colophon") }, onClick = {
                                             menuExpanded = false
@@ -1017,8 +1095,7 @@ class MainActivity : ComponentActivity() {
                                     OpenBenchesMapFab(
                                         onClick = {
                                             if (searchResultBenches != null) {
-                                                searchResultBenches = null
-                                                mapCenter?.let { fetchBenchesForCenter(it) }
+                                                clearMapSearchFilter()
                                             } else {
                                                 coroutineScope.launch {
                                                     snackbarHostState.showSnackbar(
@@ -1275,7 +1352,7 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 },
-                                                enabled = !showOfflineMapChip,
+                                                enabled = !isDeviceOffline,
                                                 modifier = Modifier.weight(1f),
                                             ) {
                                                 Text("Random Bench", textAlign = TextAlign.Center)
@@ -1288,6 +1365,7 @@ class MainActivity : ComponentActivity() {
                                                         try {
                                                             val results = fetchLatestBenches(5)
                                                             showSearchDialog = false
+                                                            todoListFilterActive = false
                                                             if (results.isEmpty()) {
                                                                 searchResultBenches = null
                                                                 snackbarHostState.showSnackbar(
@@ -1315,7 +1393,7 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                     }
                                                 },
-                                                enabled = !showOfflineMapChip,
+                                                enabled = !isDeviceOffline,
                                                 modifier = Modifier.weight(1f),
                                             ) {
                                                 Text("Newest 5 benches", textAlign = TextAlign.Center)
@@ -1331,6 +1409,7 @@ class MainActivity : ComponentActivity() {
                                             try {
                                                 val results = fetchBenchesBySearch(searchText)
                                                 showSearchDialog = false
+                                                todoListFilterActive = false
                                                 if (results.isEmpty()) {
                                                     searchResultBenches = null
                                                     snackbarHostState.showSnackbar(
@@ -1462,6 +1541,17 @@ private fun AboutScreen(
                 text = "If you are a coder or designer - feel free to help us out at github.com/openbenches/openbenches.org/",
                 style = MaterialTheme.typography.bodyLarge
             )
+
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "App Version",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = "Your current installed version is: ${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodyLarge,
+            )
             }
             AboutSocialLinksRow(
                 modifier = Modifier
@@ -1496,16 +1586,18 @@ private val aboutContributorLinks = listOf(
 @Composable
 private fun AboutContributorLinks() {
     val context = LocalContext.current
+    val linkColor = openBenchesLinkColor()
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         aboutContributorLinks.forEach { link ->
             Text(
                 text = link.label,
                 style = MaterialTheme.typography.bodyLarge.copy(
-                    color = MaterialTheme.colorScheme.primary,
+                    color = linkColor,
+                    fontWeight = FontWeight.Bold,
                     textDecoration = TextDecoration.Underline,
                 ),
                 modifier = Modifier.clickable {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)))
+                    context.startActivity(Intent(Intent.ACTION_VIEW, link.url.toUri()))
                 },
             )
         }
@@ -1554,7 +1646,7 @@ private fun AboutSocialLinksRow(modifier: Modifier = Modifier) {
             aboutSocialLinks.forEach { link ->
                 IconButton(
                     onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link.url)))
+                        context.startActivity(Intent(Intent.ACTION_VIEW, link.url.toUri()))
                     },
                 ) {
                     Image(
@@ -1573,7 +1665,7 @@ private fun AboutSocialLinksRow(modifier: Modifier = Modifier) {
                 .height(42.dp)
                 .clickable {
                     context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(CC_BY_SA_LICENSE_URL)),
+                        Intent(Intent.ACTION_VIEW, CC_BY_SA_LICENSE_URL.toUri()),
                     )
                 },
             contentScale = ContentScale.Fit,

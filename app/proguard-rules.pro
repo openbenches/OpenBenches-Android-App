@@ -49,4 +49,4 @@
 -keep class ai.onnxruntime.** { *; }
 -dontwarn ai.onnxruntime.**
 
-# Auth0 and Sentry ship consumer ProGuard rules in their AARs.
+# Auth0 ships consumer ProGuard rules in its AAR.

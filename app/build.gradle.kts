@@ -18,8 +18,8 @@ android {
         applicationId = "org.openbenches"
         minSdk = 28
         targetSdk = 36
-        versionCode = 14
-        versionName = "1.19"
+        versionCode = 20
+        versionName = "1.25"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -113,9 +113,6 @@ dependencies {
     implementation("com.auth0.android:auth0:2.11.0")
     // Align with Auth0’s Chrome Custom Tabs usage so connectAndInitialize / warmup APIs are available.
     implementation("androidx.browser:browser:1.8.0")
-
-    // Sentry for error logging
-    implementation("io.sentry:sentry-android:8.37.1")
 
     // Compose UI Test
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.6.1")

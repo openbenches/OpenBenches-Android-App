@@ -1,7 +1,7 @@
 package org.openbenches.ui
 
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -89,7 +89,6 @@ private val colophonSections = listOf(
             ColophonEntry(caption = "OpenBenches upload — https://openbenches.org/upload (multipart form upload)"),
             ColophonEntry(caption = "OpenBenches update — https://openbenches.org/update (multipart form edit)"),
             ColophonEntry(caption = "OpenBenches leaderboard — scraped/parsed from https://openbenches.org/leaderboard"),
-            ColophonEntry(caption = "Sentry Android 8.37.1 — error reporting"),
         ),
     ),
     ColophonSection(
@@ -115,7 +114,7 @@ private fun colophonAssetUri(filename: String): String =
     "file:///android_asset/colophon/$filename"
 
 private fun openUrl(context: android.content.Context, url: String) {
-    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

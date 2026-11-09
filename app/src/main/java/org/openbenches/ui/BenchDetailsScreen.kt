@@ -82,9 +82,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.drawable.BitmapDrawable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyRow
@@ -93,7 +91,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.graphics.scale
 import java.time.ZonedDateTime
+import org.openbenches.util.openBenchesMediaUrl
 import org.openbenches.util.saveBenchPhotoToGallery
 
 /**
@@ -235,16 +236,12 @@ fun BenchDetailsScreen(
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
-                                        val imageUrl = if (image.url.startsWith("http")) {
-                                            image.url
-                                        } else {
-                                            "https://openbenches.org" + image.url
-                                        }
+                                        val imageUrl = openBenchesMediaUrl(image.url, width = 600)
                                         Box(
                                             modifier = Modifier
                                                 .size(144.dp)
                                                 .clip(RoundedCornerShape(8.dp))
-                                                .background(Color.White)
+                                                .background(MaterialTheme.colorScheme.surface)
                                                 .padding(4.dp)
                                                 .clickable {
                                                     if (i < benchImages.size) {
@@ -339,8 +336,8 @@ fun BenchDetailsScreen(
                             fullscreenImageIndex.value!! >= 0 && 
                             fullscreenImageIndex.value!! < benchImages.size) {
                             FullscreenImageDialog(
-                                imageUrls = benchImages.map { 
-                                    if (it.url.startsWith("http")) it.url else "https://openbenches.org" + it.url 
+                                imageUrls = benchImages.map {
+                                    openBenchesMediaUrl(it.url, width = 1600, quality = 80)
                                 },
                                 imageLabels = benchImages.map { getMediaTypeTitle(it.mediaType) },
                                 currentIndex = fullscreenImageIndex,
@@ -427,13 +424,15 @@ fun BenchDetailsScreen(
                                             
                                             // Load marker icon
                                             try {
-                                                val markerBitmapRaw = BitmapFactory.decodeResource(ctx.resources, ctx.resources.getIdentifier("marker", "drawable", ctx.packageName))
+                                                val markerBitmapRaw = BitmapFactory.decodeResource(
+                                                    ctx.resources,
+                                                    R.drawable.marker,
+                                                )
                                                 if (markerBitmapRaw != null) {
-                                                    val markerBitmap = Bitmap.createScaledBitmap(markerBitmapRaw, 98, 64, true)
-                                                    val markerDrawable = BitmapDrawable(ctx.resources, markerBitmap)
-                                                    marker.icon = markerDrawable
+                                                    val markerBitmap = markerBitmapRaw.scale(98, 64)
+                                                    marker.icon = markerBitmap.toDrawable(ctx.resources)
                                                 }
-                                            } catch (e: Exception) {
+                                            } catch (_: Exception) {
                                                 // Use default marker if custom marker fails to load
                                             }
                                             
@@ -452,17 +451,17 @@ fun BenchDetailsScreen(
                                     // Try parsing ISO 8601 with or without time zone
                                     val zoned = try {
                                         ZonedDateTime.parse(input)
-                                    } catch (e: Exception) {
+                                    } catch (_: Exception) {
                                         null
                                     }
                                     val local = try {
                                         LocalDateTime.parse(input)
-                                    } catch (e: Exception) {
+                                    } catch (_: Exception) {
                                         null
                                     }
                                     val date = zoned?.toLocalDate() ?: local?.toLocalDate()
                                     date?.format(DateTimeFormatter.ofPattern("yyyy MMMM dd", Locale.getDefault())) ?: input
-                                } catch (e: DateTimeParseException) {
+                                } catch (_: DateTimeParseException) {
                                     input
                                 }
                                 Text(

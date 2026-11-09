@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -81,6 +82,9 @@ import org.openbenches.ui.theme.OpenBenchesGoldButton
 import org.openbenches.ui.theme.OpenBenchesPlaqueGold
 import org.openbenches.ui.theme.OpenBenchesTheme
 import org.openbenches.ui.theme.OpenBenchesTopAppBar
+import org.openbenches.ui.theme.openBenchesLinkColor
+import androidx.compose.ui.text.font.FontWeight
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -116,6 +120,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import org.openbenches.R
 import org.openbenches.util.InscriptionOcr
+import org.openbenches.util.rotatePhotoUri90Clockwise
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.graphics.drawable.toDrawable
@@ -123,6 +128,7 @@ import androidx.core.graphics.scale
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import org.openbenches.data.AuthJwt
 import org.openbenches.data.PendingBenchUploadStore
 import org.openbenches.data.UploadBenchResult
 import org.openbenches.data.isGpsExifRelatedUploadFailure
@@ -374,12 +380,20 @@ private fun PhotoSlot(
 fun AddBenchScreen(
     onBack: () -> Unit,
     authToken: String? = null,
+    authUsername: String? = null,
     /** When set, loads a saved pending bench for editing (replaces on save, deletes on upload). */
     editingPendingId: String? = null,
     onPendingUploadsChanged: () -> Unit = {},
     mapProvider: MapProvider = MapProvider.OSM,
 ) {
     val context = LocalContext.current
+    val uploadAsUsername = remember(authToken, authUsername) {
+        if (authToken.isNullOrBlank()) {
+            "Anon"
+        } else {
+            AuthJwt.displayName(AuthJwt.decodePayloadClaims(authToken), authUsername) ?: "Anon"
+        }
+    }
     var inscriptionText by rememberSaveable { mutableStateOf("") }
     var inscriptionFocused by remember { mutableStateOf(false) }
     var photoUris by rememberSaveable(stateSaver = PhotoUriListSaver) {
@@ -410,11 +424,34 @@ fun AddBenchScreen(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     var uploadSuccessBenchId by remember { mutableStateOf<String?>(null) }
     var showGpsUploadFailureDialog by remember { mutableStateOf(false) }
+    var showMissingPhotoGpsDialog by remember { mutableStateOf(false) }
     var showSaveChoiceDialog by remember { mutableStateOf(false) }
+    var showDiscardConfirmDialog by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
     val pendingUploadStore = remember { PendingBenchUploadStore(context) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val hasStartedBenchDetails = remember(inscriptionText, photoUris) {
+        inscriptionText.isNotBlank() || photoUris.any { it != null }
+    }
+
+    fun requestExit() {
+        if (hasStartedBenchDetails) {
+            showDiscardConfirmDialog = true
+        } else {
+            onBack()
+        }
+    }
+
+    BackHandler { requestExit() }
+
+    // Warm OCR off the critical path of the first photo — deferred from Application.onCreate.
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            InscriptionOcr.ensureEngine(context.applicationContext)
+        }
+    }
 
     LaunchedEffect(editingPendingId) {
         val pendingId = editingPendingId ?: return@LaunchedEffect
@@ -441,7 +478,7 @@ fun AddBenchScreen(
         }
     }
 
-    fun updateLocationFromPhotoExif(uri: Uri) {
+    fun updateLocationFromPhotoExif(uri: Uri, photoIndex: Int = -1) {
         coroutineScope.launch {
             val latLng = withContext(Dispatchers.IO) {
                 try {
@@ -457,6 +494,7 @@ fun AddBenchScreen(
                     null
                 }
             }
+            var hasUsableGps = false
             if (latLng != null) {
                 val lat = latLng.first
                 val lng = latLng.second
@@ -466,7 +504,12 @@ fun AddBenchScreen(
                     savedLat = lat
                     savedLng = lng
                     locationLoading = false
+                    hasUsableGps = true
                 }
+            }
+            // First photo is what the server uses for location — warn early if EXIF GPS is missing.
+            if (photoIndex == 0 && !hasUsableGps) {
+                showMissingPhotoGpsDialog = true
             }
         }
     }
@@ -507,21 +550,30 @@ fun AddBenchScreen(
         ) == PackageManager.PERMISSION_GRANTED
     }
     
-    // Create a temporary file for camera photos
-    val photoFile = remember { 
-        File(context.cacheDir, "temp_photo.jpg")
+    // Persist path across rotation while the camera app is open (remember alone is cleared).
+    var pendingCameraFilePath by rememberSaveable { mutableStateOf<String?>(null) }
+
+    fun newCameraPhotoFile(): File {
+        val file = File(context.cacheDir, "camera_photo_${System.currentTimeMillis()}.jpg")
+        pendingCameraFilePath = file.absolutePath
+        return file
     }
+
+    fun cameraPhotoUri(file: File): Uri =
+        FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
     
     // Camera launcher
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success && selectedPhotoIndex >= 0) {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                photoFile
-            )
+        val capturedFile = pendingCameraFilePath?.let { File(it) }
+        pendingCameraFilePath = null
+        if (success && selectedPhotoIndex >= 0 && capturedFile != null && capturedFile.exists()) {
+            val uri = cameraPhotoUri(capturedFile)
             val index = selectedPhotoIndex
             val newUris = photoUris.toMutableList()
             while (newUris.size <= index) {
@@ -533,8 +585,10 @@ fun AddBenchScreen(
                 photoTypes = photoTypes + getDefaultPhotoType(photoTypes.size)
             }
             photoUris = newUris
-            updateLocationFromPhotoExif(uri)
+            updateLocationFromPhotoExif(uri, photoIndex = index)
             updateInscriptionFromPhotoText(uri)
+        } else if (capturedFile != null && capturedFile.exists()) {
+            capturedFile.delete()
         }
         selectedPhotoIndex = -1
     }
@@ -544,12 +598,7 @@ fun AddBenchScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted && selectedPhotoIndex >= 0) {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                photoFile
-            )
-            cameraLauncher.launch(uri)
+            cameraLauncher.launch(cameraPhotoUri(newCameraPhotoFile()))
         } else {
             selectedPhotoIndex = -1
         }
@@ -571,7 +620,7 @@ fun AddBenchScreen(
                     newUris.add(null)
                 }
                 photoUris = newUris
-                updateLocationFromPhotoExif(it)
+                updateLocationFromPhotoExif(it, photoIndex = index)
                 updateInscriptionFromPhotoText(it)
             }
         }
@@ -593,13 +642,23 @@ fun AddBenchScreen(
     }
     
     // Function to launch camera
-    fun launchCamera(context: Context) {
-        val uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            photoFile
-        )
-        cameraLauncher.launch(uri)
+    fun launchCamera() {
+        cameraLauncher.launch(cameraPhotoUri(newCameraPhotoFile()))
+    }
+
+    fun rotatePhotoAt(index: Int) {
+        val uri = photoUris.getOrNull(index) ?: return
+        coroutineScope.launch {
+            val rotatedUri = rotatePhotoUri90Clockwise(context, uri) ?: run {
+                snackbarHostState.showSnackbar("Could not rotate photo.")
+                return@launch
+            }
+            val newUris = photoUris.toMutableList()
+            if (index in newUris.indices) {
+                newUris[index] = rotatedUri
+                photoUris = newUris
+            }
+        }
     }
 
     fun deletePhoto(index: Int) {
@@ -653,7 +712,7 @@ fun AddBenchScreen(
             }
             "camera" -> {
                 if (hasCameraPermission) {
-                    launchCamera(context)
+                    launchCamera()
                 } else {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }
@@ -833,7 +892,7 @@ fun AddBenchScreen(
                     Text(text = if (editingPendingId != null) "Edit bench" else "Add Bench")
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = { requestExit() }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
@@ -942,6 +1001,7 @@ fun AddBenchScreen(
                             }
                         },
                         onDismiss = { fullscreenImageIndex = -1 },
+                        onRotateClockwise = { rotatePhotoAt(fullscreenImageIndex) },
                         onRegionTextRecognized = { text ->
                             if (text.isNotBlank()) {
                                 inscriptionText = if (inscriptionText.isBlank()) {
@@ -1214,7 +1274,10 @@ fun AddBenchScreen(
                 onDismissRequest = { showSaveChoiceDialog = false },
                 title = { Text("Save bench") },
                 text = {
-                    Text("Would you like to upload now or save to upload later?")
+                    Text(
+                        "Would you like to upload now or save to upload later?\n" +
+                            "Uploads will use username: $uploadAsUsername",
+                    )
                 },
                 confirmButton = {
                     TextButton(
@@ -1239,6 +1302,33 @@ fun AddBenchScreen(
             )
         }
 
+        if (showDiscardConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showDiscardConfirmDialog = false },
+                title = { Text("Discard bench?") },
+                text = {
+                    Text(
+                        "The current bench details will be lost. Are you sure you want to exit?",
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showDiscardConfirmDialog = false
+                            onBack()
+                        },
+                    ) {
+                        Text("Exit")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDiscardConfirmDialog = false }) {
+                        Text("Cancel")
+                    }
+                },
+            )
+        }
+
         if (showGpsUploadFailureDialog) {
             AlertDialog(
                 onDismissRequest = { showGpsUploadFailureDialog = false },
@@ -1250,6 +1340,24 @@ fun AddBenchScreen(
                 },
                 confirmButton = {
                     TextButton(onClick = { showGpsUploadFailureDialog = false }) {
+                        Text("OK")
+                    }
+                }
+            )
+        }
+
+        if (showMissingPhotoGpsDialog) {
+            AlertDialog(
+                onDismissRequest = { showMissingPhotoGpsDialog = false },
+                title = { Text("GPS data required") },
+                text = {
+                    Text(
+                        "The provided photo do not contain GPS data which is required to locate the bench. " +
+                            "Please ensure your camera has location permissions",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showMissingPhotoGpsDialog = false }) {
                         Text("OK")
                     }
                 }
@@ -1270,6 +1378,7 @@ private fun FullscreenImageDialog(
     currentIndex: Int,
     onIndexChanged: (Int) -> Unit,
     onDismiss: () -> Unit,
+    onRotateClockwise: () -> Unit = {},
     onRegionTextRecognized: (String) -> Unit = {},
 ) {
     if (currentIndex !in photoBitmaps.indices) {
@@ -1494,10 +1603,8 @@ private fun FullscreenImageDialog(
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Spacer(modifier = Modifier.width(48.dp))
                         if (isRecognizingRegion) {
                             CircularProgressIndicator(
                                 color = OpenBenchesPlaqueGold,
@@ -1505,20 +1612,36 @@ private fun FullscreenImageDialog(
                                 strokeWidth = 3.dp,
                             )
                         } else if (!selectingRegion) {
-                            OpenBenchesGoldButton(
-                                onClick = {
-                                    zoomState.reset()
-                                    clearSelection()
-                                    selectingRegion = true
-                                },
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Crop,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Select area to read")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OpenBenchesGoldButton(
+                                    onClick = {
+                                        zoomState.reset()
+                                        onRotateClockwise()
+                                    },
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.RotateRight,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Rotate")
+                                }
+                                OpenBenchesGoldButton(
+                                    onClick = {
+                                        zoomState.reset()
+                                        clearSelection()
+                                        selectingRegion = true
+                                    },
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Crop,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Select area to read")
+                                }
                             }
                         } else {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1576,6 +1699,7 @@ private fun FullscreenImageDialog(
                                 }
                             }
                         }
+                        Spacer(modifier = Modifier.weight(1f))
                         IconButton(
                             onClick = {
                                 if (selectingRegion) exitSelectionMode() else onDismiss()
@@ -1682,7 +1806,8 @@ private fun BenchUploadLegalNotice(modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        // Neutral panel (not sky-blue) so body text and links keep WCAG AA contrast.
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
         Column(
@@ -1697,7 +1822,7 @@ private fun BenchUploadLegalNotice(modifier: Modifier = Modifier) {
                     "(CC BY-SA 4.0) license. This means other people can use the photo and its data without having " +
                     "to ask permission, but they will have to give appropriate credit. Thanks!",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onSurface,
             )
 
             val privacyText = buildAnnotatedString {
@@ -1705,8 +1830,9 @@ private fun BenchUploadLegalNotice(modifier: Modifier = Modifier) {
                 pushStringAnnotation(tag = "privacy", annotation = OPENBENCHES_PRIVACY_POLICY_URL)
                 withStyle(
                     SpanStyle(
-                        color = MaterialTheme.colorScheme.primary,
+                        color = openBenchesLinkColor(),
                         textDecoration = TextDecoration.Underline,
+                        fontWeight = FontWeight.Bold,
                     )
                 ) {
                     append("privacy policy")
@@ -1718,7 +1844,7 @@ private fun BenchUploadLegalNotice(modifier: Modifier = Modifier) {
             ClickableText(
                 text = privacyText,
                 style = MaterialTheme.typography.bodySmall.copy(
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = MaterialTheme.colorScheme.onSurface,
                 ),
                 onClick = { offset ->
                     privacyText.getStringAnnotations(tag = "privacy", start = offset, end = offset)

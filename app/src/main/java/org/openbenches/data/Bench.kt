@@ -77,17 +77,77 @@ private fun isAuth0SessionFirewallError(body: String): Boolean {
         (m.contains("auth0") && m.contains("tenant-error"))
 }
 
+/**
+ * Detects CDN/WAF bot-challenge HTML (Cloudflare-style "One moment, please…" pages).
+ * OkHttp cannot complete these JS challenges, so the app must not dump the raw HTML to users.
+ */
+private fun isBotChallengePage(body: String): Boolean {
+    if (body.isBlank()) return false
+    val m = body.lowercase()
+    val challengePhrases = listOf(
+        "one moment, please",
+        "please wait while your request is being verified",
+        "checking your browser",
+        "just a moment",
+        "attention required",
+        "cf-browser-verification",
+        "challenge-platform",
+        "cdn-cgi/challenge",
+        "cf-challenge",
+        "enable javascript and cookies to continue",
+    )
+    if (challengePhrases.any { m.contains(it) }) return true
+    // Obfuscated challenge scripts often reload after a short delay.
+    return m.contains("window.location.reload") &&
+        (m.contains("settimeout") || m.contains("spinner") || m.contains("outer-container"))
+}
+
+private fun botChallengeFailureMessage(operation: String, code: Int? = null): String {
+    val codePart = code?.let { " ($it)" }.orEmpty()
+    return "$operation failed$codePart: blocked by the server's security check. " +
+        "Please wait a moment and try again. If it keeps happening, try another network " +
+        "(Wi‑Fi or mobile data), or try later."
+}
+
 private fun failureMessageForHttpBody(operation: String, code: Int, errorText: String): String {
+    if (isBotChallengePage(errorText)) {
+        Log.w(UPLOAD_LOG_TAG, "$operation got bot-challenge HTML (HTTP $code); suppressing raw body in UI")
+        return botChallengeFailureMessage(operation, code)
+    }
     if (isAuth0SessionFirewallError(errorText)) {
         return "$operation failed ($code): Auth0 login/session error. " +
             "Try logging out and back in — see Logcat tag $UPLOAD_LOG_TAG."
     }
     return if (errorText.isNotEmpty()) {
         val plain = stripHtmlToPlainText(errorText)
+        // Huge HTML leftovers (after tag strip) are almost never useful to show.
+        if (plain.length > 280 || plain.contains("function()") || plain.contains("{var ")) {
+            return "$operation failed ($code): unexpected server response. " +
+                "Please try again — see Logcat tag $UPLOAD_LOG_TAG."
+        }
         "$operation failed ($code): ${plain.ifBlank { errorText }} — see Logcat tag $UPLOAD_LOG_TAG"
     } else {
         "$operation failed ($code) — see Logcat tag $UPLOAD_LOG_TAG"
     }
+}
+
+/** Maps a non-bench-ID "success" body to a user-facing failure (challenge pages, HTML, etc.). */
+private fun unexpectedSuccessBodyFailure(operation: String, bodyText: String): UploadBenchResult.Failure {
+    if (isBotChallengePage(bodyText)) {
+        Log.w(UPLOAD_LOG_TAG, "$operation got bot-challenge HTML on HTTP success; suppressing raw body in UI")
+        return UploadBenchResult.Failure(botChallengeFailureMessage(operation))
+    }
+    val plain = stripHtmlToPlainText(bodyText)
+    if (plain.length > 280 || plain.contains("function()") || plain.contains("{var ")) {
+        return UploadBenchResult.Failure(
+            "$operation returned an unexpected server page. Please try again later.",
+        )
+    }
+    return UploadBenchResult.Failure(
+        plain.ifBlank {
+            "$operation returned unexpected response (not bench ID). Check Logcat tag $UPLOAD_LOG_TAG."
+        },
+    )
 }
 
 private fun mediaTypeToShortName(input: String?): String {
@@ -635,12 +695,7 @@ suspend fun uploadBench(
                     return UploadBenchResult.Success(bodyText)
                 }
                 logLong("Upload HTTP ${response.code()} non-numeric success body:\n$bodyText")
-                val plain = stripHtmlToPlainText(bodyText)
-                return UploadBenchResult.Failure(
-                    plain.ifBlank {
-                        "Upload returned unexpected response (not bench ID). Check Logcat tag $UPLOAD_LOG_TAG."
-                    }
-                )
+                return unexpectedSuccessBodyFailure("Upload", bodyText)
             }
             return UploadBenchResult.Failure("Upload succeeded but server returned an empty response body.")
         } else {
@@ -766,12 +821,7 @@ suspend fun updateBench(
                     return UploadBenchResult.Success(bodyText)
                 }
                 logLong("Update HTTP ${response.code()} non-numeric success body:\n$bodyText")
-                val plain = stripHtmlToPlainText(bodyText)
-                return UploadBenchResult.Failure(
-                    plain.ifBlank {
-                        "Update returned unexpected response. Check Logcat tag $UPLOAD_LOG_TAG."
-                    }
-                )
+                return unexpectedSuccessBodyFailure("Update", bodyText)
             }
             return UploadBenchResult.Failure("Update succeeded but server returned an empty response body.")
         } else {

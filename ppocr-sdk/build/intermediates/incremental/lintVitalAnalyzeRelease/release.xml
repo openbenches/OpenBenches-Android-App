@@ -7,7 +7,7 @@
     proguardFiles="build/intermediates/default_proguard_files/global/proguard-android-optimize.txt-9.2.1"
     consumerProguardFiles="proguard-rules.pro"
     partialResultsDir="build/intermediates/lint_vital_partial_results/release/lintVitalAnalyzeRelease/out"
-    desugaredMethodsFiles="/home/simon/.gradle/caches/9.8.0/transforms/29cad1396e1be0ce9f8dd6ded1f5a4d4/transformed/D8BackportedDesugaredMethods.txt">
+    desugaredMethodsFiles="/home/simon/.gradle/caches/9.8.2/transforms/7d5cc95de2096ddb9d70f86be4ea75f0/transformed/D8BackportedDesugaredMethods.txt">
   <buildFeatures/>
   <sourceProviders>
     <sourceProvider
@@ -27,6 +27,6 @@
       type="MAIN"
       applicationId="com.paddle.ocr"
       generatedSourceFolders="build/generated/ap_generated_sources/release/out"
-      desugaredMethodsFiles="/home/simon/.gradle/caches/9.8.0/transforms/29cad1396e1be0ce9f8dd6ded1f5a4d4/transformed/D8BackportedDesugaredMethods.txt">
+      desugaredMethodsFiles="/home/simon/.gradle/caches/9.8.2/transforms/7d5cc95de2096ddb9d70f86be4ea75f0/transformed/D8BackportedDesugaredMethods.txt">
   </artifact>
 </variant>

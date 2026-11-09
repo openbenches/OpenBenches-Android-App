@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -39,9 +38,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -65,6 +67,8 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -85,16 +89,24 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.graphics.scale
+import androidx.core.net.toUri
 import androidx.core.text.HtmlCompat
 import coil.compose.SubcomposeAsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.openbenches.R
 import org.openbenches.data.BenchMedia
 import org.openbenches.data.UploadBenchResult
 import org.openbenches.data.fetchBenchDetails
 import org.openbenches.data.updateBench
+import org.openbenches.ui.theme.OpenBenchesGoldButton
+import org.openbenches.ui.theme.OpenBenchesTheme
 import org.openbenches.ui.theme.OpenBenchesTopAppBar
+import org.openbenches.util.openBenchesMediaUrl
+import org.openbenches.util.rotatePhotoUri90Clockwise
 import org.osmdroid.config.Configuration
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
@@ -135,7 +147,7 @@ private fun ContentResolver.openImageInputStreamPreservingMetadata(uri: Uri): In
 
 private val EditPhotoUriListSaver = listSaver<List<Uri?>, String>(
     save = { list -> list.map { it?.toString() ?: "" } },
-    restore = { strs -> strs.map { s -> if (s.isEmpty()) null else Uri.parse(s) } },
+    restore = { strs -> strs.map { s -> if (s.isEmpty()) null else s.toUri() } },
 )
 
 private val EditPhotoTypesListSaver = listSaver<List<String>, String>(
@@ -144,7 +156,7 @@ private val EditPhotoTypesListSaver = listSaver<List<String>, String>(
 )
 
 private fun mediaUrlAbsolute(url: String): String =
-    if (url.startsWith("http")) url else "https://openbenches.org$url"
+    openBenchesMediaUrl(url, width = 600)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -155,6 +167,7 @@ private fun EditNewPhotoSlot(
     onPhotoTypeChanged: (String) -> Unit,
     onSelectGallery: () -> Unit,
     onSelectCamera: () -> Unit,
+    onPhotoClick: ((Int) -> Unit)? = null,
     onDeletePhoto: (() -> Unit)? = null,
 ) {
     Column(
@@ -176,7 +189,8 @@ private fun EditNewPhotoSlot(
                     contentDescription = "New photo $photoNumber",
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(RoundedCornerShape(8.dp)),
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onPhotoClick?.invoke(photoNumber - 1) },
                     contentScale = ContentScale.Crop,
                 )
                 IconButton(
@@ -334,10 +348,11 @@ fun EditBenchScreen(
         mutableStateOf(listOf(editDefaultPhotoType(0)))
     }
     var photoBitmaps by remember { mutableStateOf<List<Bitmap?>>(emptyList()) }
-    var selectedPhotoIndex by rememberSaveable { mutableStateOf(-1) }
+    var selectedPhotoIndex by rememberSaveable { mutableIntStateOf(-1) }
+    var fullscreenImageIndex by rememberSaveable { mutableIntStateOf(-1) }
 
     var isUploading by remember { mutableStateOf(false) }
-    var uploadProgress by remember { mutableStateOf(0f) }
+    var uploadProgress by remember { mutableFloatStateOf(0f) }
     var uploadSuccess by remember { mutableStateOf(false) }
     var showErrorDialog by remember { mutableStateOf<String?>(null) }
 
@@ -390,17 +405,29 @@ fun EditBenchScreen(
         ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
     }
-    val photoFile = remember { File(context.cacheDir, "edit_temp_photo.jpg") }
+    // Persist path across rotation while the camera app is open (remember alone is cleared).
+    var pendingCameraFilePath by rememberSaveable { mutableStateOf<String?>(null) }
+
+    fun newCameraPhotoFile(): File {
+        val file = File(context.cacheDir, "edit_camera_photo_${System.currentTimeMillis()}.jpg")
+        pendingCameraFilePath = file.absolutePath
+        return file
+    }
+
+    fun cameraPhotoUri(file: File): Uri =
+        FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture(),
     ) { success ->
-        if (success && selectedPhotoIndex >= 0) {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                photoFile,
-            )
+        val capturedFile = pendingCameraFilePath?.let { File(it) }
+        pendingCameraFilePath = null
+        if (success && selectedPhotoIndex >= 0 && capturedFile != null && capturedFile.exists()) {
+            val uri = cameraPhotoUri(capturedFile)
             val index = selectedPhotoIndex
             val newUris = photoUris.toMutableList()
             while (newUris.size <= index) newUris.add(null)
@@ -410,6 +437,8 @@ fun EditBenchScreen(
                 photoTypes = photoTypes + editDefaultPhotoType(photoTypes.size)
             }
             photoUris = newUris
+        } else if (capturedFile != null && capturedFile.exists()) {
+            capturedFile.delete()
         }
         selectedPhotoIndex = -1
     }
@@ -418,12 +447,7 @@ fun EditBenchScreen(
         contract = ActivityResultContracts.RequestPermission(),
     ) { granted ->
         if (granted && selectedPhotoIndex >= 0) {
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                photoFile,
-            )
-            cameraLauncher.launch(uri)
+            cameraLauncher.launch(cameraPhotoUri(newCameraPhotoFile()))
         } else {
             selectedPhotoIndex = -1
         }
@@ -451,12 +475,22 @@ fun EditBenchScreen(
     }
 
     fun launchCamera() {
-        val uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            photoFile,
-        )
-        cameraLauncher.launch(uri)
+        cameraLauncher.launch(cameraPhotoUri(newCameraPhotoFile()))
+    }
+
+    fun rotatePhotoAt(index: Int) {
+        val uri = photoUris.getOrNull(index) ?: return
+        coroutineScope.launch {
+            val rotatedUri = rotatePhotoUri90Clockwise(context, uri) ?: run {
+                snackbarHostState.showSnackbar("Could not rotate photo.")
+                return@launch
+            }
+            val newUris = photoUris.toMutableList()
+            if (index in newUris.indices) {
+                newUris[index] = rotatedUri
+                photoUris = newUris
+            }
+        }
     }
 
     fun deleteNewPhoto(index: Int) {
@@ -471,6 +505,10 @@ fun EditBenchScreen(
         while (newTypes.size > newUris.size) newTypes.removeAt(newTypes.lastIndex)
         photoUris = newUris
         photoTypes = newTypes
+        when {
+            fullscreenImageIndex == index -> fullscreenImageIndex = -1
+            fullscreenImageIndex > index -> fullscreenImageIndex -= 1
+        }
     }
 
     fun selectPhoto(index: Int, source: String) {
@@ -646,7 +684,7 @@ fun EditBenchScreen(
                                             modifier = Modifier
                                                 .size(120.dp)
                                                 .clip(RoundedCornerShape(8.dp))
-                                                .background(Color.White)
+                                                .background(MaterialTheme.colorScheme.surface)
                                                 .border(
                                                     1.dp,
                                                     MaterialTheme.colorScheme.outline,
@@ -727,6 +765,9 @@ fun EditBenchScreen(
                                     },
                                     onSelectGallery = { selectPhoto(index, "gallery") },
                                     onSelectCamera = { selectPhoto(index, "camera") },
+                                    onPhotoClick = { clickedIndex ->
+                                        fullscreenImageIndex = clickedIndex
+                                    },
                                     onDeletePhoto = { deleteNewPhoto(index) },
                                 )
                             }
@@ -802,15 +843,10 @@ fun EditBenchScreen(
                                         try {
                                             val raw = BitmapFactory.decodeResource(
                                                 ctx.resources,
-                                                ctx.resources.getIdentifier(
-                                                    "marker",
-                                                    "drawable",
-                                                    ctx.packageName,
-                                                ),
+                                                R.drawable.marker,
                                             )
                                             if (raw != null) {
-                                                val scaled = Bitmap.createScaledBitmap(raw, 98, 64, true)
-                                                marker.icon = BitmapDrawable(ctx.resources, scaled)
+                                                marker.icon = raw.scale(98, 64).toDrawable(ctx.resources)
                                             }
                                         } catch (_: Exception) {
                                         }
@@ -915,6 +951,83 @@ fun EditBenchScreen(
                         }
                     },
                 )
+            }
+
+            val fullscreenBitmap = photoBitmaps.getOrNull(fullscreenImageIndex)
+            if (fullscreenImageIndex >= 0 && fullscreenBitmap != null) {
+                EditPendingPhotoFullscreenDialog(
+                    bitmap = fullscreenBitmap,
+                    onRotateClockwise = { rotatePhotoAt(fullscreenImageIndex) },
+                    onDismiss = { fullscreenImageIndex = -1 },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditPendingPhotoFullscreenDialog(
+    bitmap: Bitmap,
+    onRotateClockwise: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val zoomState = rememberFullscreenZoomState()
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        OpenBenchesTheme {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+                    .fullscreenDoubleTapZoom(zoomState)
+                    .statusBarsPadding()
+                    .navigationBarsPadding(),
+            ) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Full screen photo",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .fullscreenZoomGraphics(zoomState)
+                        .fullscreenPhotoGestures(zoomState),
+                )
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OpenBenchesGoldButton(
+                        onClick = {
+                            zoomState.reset()
+                            onRotateClockwise()
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.RotateRight,
+                            contentDescription = null,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Rotate")
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Close",
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp),
+                        )
+                    }
+                }
             }
         }
     }

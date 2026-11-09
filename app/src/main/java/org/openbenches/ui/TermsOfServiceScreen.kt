@@ -167,10 +167,6 @@ fun TermsOfServiceScreen(
                 "If you sign in with OpenStreetMap, all we know is your username. We cannot edit your maps. " +
                     "We can't mine your data. We can't see your email address. We don't know your password.",
             )
-            TermsBody(
-                "If you sign in with Mastodon or other Fediverse service, all we store is your username and server address. " +
-                    "We cannot post as you. We don't have write-access to your account. We can't see your email address. We don't know your password.",
-            )
             TermsBody("For the automatic text detection, your browser will send your image to Google's Cloud Vision Service.")
             TermsBody("Our maps are drawn using OpenFreeMap and ESRI. Each has their own privacy policy.")
             TermsBody("Image proxy service uses weserv.nl.")

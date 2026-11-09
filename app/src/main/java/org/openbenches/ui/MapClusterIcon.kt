@@ -1,12 +1,14 @@
 package org.openbenches.ui
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.Color as AndroidColor
 import android.graphics.drawable.BitmapDrawable
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.graphics.toColorInt
 
 /** Base cluster diameter at close zoom (matches legacy 160px markers). */
 private const val BASE_CLUSTER_ICON_PX = 160
@@ -42,14 +44,14 @@ fun createClusterIcon(
 ): BitmapDrawable {
     val size = clusterMarkerSizePx(zoomLevel, count)
     val scale = size / BASE_CLUSTER_ICON_PX.toFloat()
-    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val bitmap = createBitmap(size, size)
     val canvas = Canvas(bitmap)
 
     val backgroundColor = when {
-        count < 10 -> AndroidColor.parseColor("#4CAF50")
-        count < 50 -> AndroidColor.parseColor("#FFC107")
-        count < 100 -> AndroidColor.parseColor("#FF9800")
-        else -> AndroidColor.parseColor("#F44336")
+        count < 10 -> "#4CAF50".toColorInt()
+        count < 50 -> "#FFC107".toColorInt()
+        count < 100 -> "#FF9800".toColorInt()
+        else -> "#F44336".toColorInt()
     }
 
     val paint = Paint().apply {
@@ -104,5 +106,5 @@ fun createClusterIcon(
         paint,
     )
 
-    return BitmapDrawable(context.resources, bitmap)
+    return bitmap.toDrawable(context.resources)
 }

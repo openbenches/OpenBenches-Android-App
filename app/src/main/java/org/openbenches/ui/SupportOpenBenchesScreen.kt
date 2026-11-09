@@ -1,8 +1,8 @@
 package org.openbenches.ui
 
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.Image
+import androidx.core.net.toUri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import org.openbenches.ui.theme.OpenBenchesHeaderBanner
+import org.openbenches.ui.theme.openBenchesLinkColor
 
 private const val OPENBENCHES_SPREADSHOP_URL = "https://openbenches.myspreadshop.co.uk/all"
 private const val KRYSTAL_AFFILIATE_URL =
@@ -128,7 +129,7 @@ fun SupportOpenBenchesScreen(
                     .clip(RoundedCornerShape(12.dp))
                     .clickable {
                         context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(OPENBENCHES_SPREADSHOP_URL)),
+                            Intent(Intent.ACTION_VIEW, OPENBENCHES_SPREADSHOP_URL.toUri()),
                         )
                     },
                 contentScale = ContentScale.FillWidth,
@@ -169,15 +170,15 @@ private fun SupportSectionHeading(text: String) {
 @Composable
 private fun SupportKrystalHostedLine() {
     val context = LocalContext.current
+    val linkStyle = SpanStyle(
+        color = openBenchesLinkColor(),
+        fontWeight = FontWeight.Bold,
+        textDecoration = TextDecoration.Underline,
+    )
     val hostedText = buildAnnotatedString {
         append("OpenBenches is hosted on ")
         pushStringAnnotation(tag = "krystal", annotation = KRYSTAL_AFFILIATE_URL)
-        withStyle(
-            SpanStyle(
-                color = MaterialTheme.colorScheme.primary,
-                textDecoration = TextDecoration.Underline,
-            ),
-        ) {
+        withStyle(linkStyle) {
             append("Krystal.uk")
         }
         pop()
@@ -192,7 +193,7 @@ private fun SupportKrystalHostedLine() {
                 .firstOrNull()
                 ?.let { annotation ->
                     context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item)),
+                        Intent(Intent.ACTION_VIEW, annotation.item.toUri()),
                     )
                 }
         },
@@ -203,7 +204,8 @@ private fun SupportKrystalHostedLine() {
 private fun SupportDonationsLine() {
     val context = LocalContext.current
     val linkStyle = SpanStyle(
-        color = MaterialTheme.colorScheme.primary,
+        color = openBenchesLinkColor(),
+        fontWeight = FontWeight.Bold,
         textDecoration = TextDecoration.Underline,
     )
     val donationsText = buildAnnotatedString {
@@ -230,7 +232,7 @@ private fun SupportDonationsLine() {
                 .firstOrNull()
                 ?.let { annotation ->
                     context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item)),
+                        Intent(Intent.ACTION_VIEW, annotation.item.toUri()),
                     )
                 }
         },
@@ -249,6 +251,11 @@ private fun SupportBody(text: String) {
 @Composable
 private fun SupportBulletList(items: List<SupportBulletItem>) {
     val context = LocalContext.current
+    val linkStyle = SpanStyle(
+        color = openBenchesLinkColor(),
+        fontWeight = FontWeight.Bold,
+        textDecoration = TextDecoration.Underline,
+    )
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -258,12 +265,7 @@ private fun SupportBulletList(items: List<SupportBulletItem>) {
                 val bulletText = buildAnnotatedString {
                     append("• ")
                     pushStringAnnotation(tag = "link", annotation = item.url)
-                    withStyle(
-                        SpanStyle(
-                            color = MaterialTheme.colorScheme.primary,
-                            textDecoration = TextDecoration.Underline,
-                        ),
-                    ) {
+                    withStyle(linkStyle) {
                         append(item.label)
                     }
                     pop()
@@ -277,7 +279,7 @@ private fun SupportBulletList(items: List<SupportBulletItem>) {
                             .firstOrNull()
                             ?.let { annotation ->
                                 context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item)),
+                                    Intent(Intent.ACTION_VIEW, annotation.item.toUri()),
                                 )
                             }
                     },
