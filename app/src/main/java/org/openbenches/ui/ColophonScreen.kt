@@ -56,28 +56,29 @@ private val colophonSections = listOf(
             ColophonEntry(caption = "Android (min SDK 28, target/compile SDK 36)"),
             ColophonEntry(caption = "Kotlin 2.2.10"),
             ColophonEntry(caption = "JVM 11"),
-            ColophonEntry(caption = "Gradle Kotlin DSL with Android Gradle Plugin 9.2.1"),
+            ColophonEntry(caption = "Gradle 9.9.0 (Kotlin DSL) with Android Gradle Plugin 9.2.1"),
         ),
     ),
     ColophonSection(
         title = "User Interface",
         entries = listOf(
             ColophonEntry(caption = "Jetpack Compose (Material 3, Compose BOM 2024.02.00)"),
-            ColophonEntry(caption = "Material Icons Extended"),
+            ColophonEntry(caption = "Material Icons Extended 1.6.1"),
             ColophonEntry(caption = "Edge-to-edge UI via enableEdgeToEdge()"),
             ColophonEntry(caption = "Custom Compose theme/components (OpenBenchesTheme, gold buttons, header banner, etc.)"),
             ColophonEntry(caption = "AndroidView interop for embedding the native map view inside Compose"),
-            ColophonEntry(caption = "Coil 2.4.0 (+ SVG decoder) — image loading in Compose"),
+            ColophonEntry(caption = "Coil 2.7.0 (+ SVG decoder) — image loading in Compose"),
+            ColophonEntry(caption = "Accompanist Permissions 0.34.0 — runtime location permission in Compose"),
         ),
     ),
     ColophonSection(
         title = "Maps & Locations",
         entries = listOf(
-            ColophonEntry(caption = "osmdroid 6.1.16 — OpenStreetMap and Esri World Imagery tiles"),
+            ColophonEntry(caption = "osmdroid 6.1.20 — OpenStreetMap and Esri World Imagery tiles"),
             ColophonEntry(caption = "OpenStreetMap (Mapnik) and Esri World Imagery satellite tile sources"),
             ColophonEntry(caption = "Custom viewport clustering (ViewportBenchClusterer, MapClusterIcon)"),
-            ColophonEntry(caption = "Google Play Services Location — device GPS / fused location"),
-            ColophonEntry(caption = "AndroidX ExifInterface & MediaStore — reading GPS from photo metadata"),
+            ColophonEntry(caption = "Google Play Services Location 21.4.0 — device GPS / fused location"),
+            ColophonEntry(caption = "AndroidX ExifInterface 1.4.2 & MediaStore — reading GPS from photo metadata"),
         ),
     ),
     ColophonSection(
@@ -95,7 +96,7 @@ private val colophonSections = listOf(
         title = "Inscription OCR",
         entries = listOf(
             ColophonEntry(caption = "OpenCV 4.12.0 — photo preprocessing for inscription recognition"),
-            ColophonEntry(caption = "PaddleOCR (:ppocr-sdk) with ONNX Runtime — inscription text recognition"),
+            ColophonEntry(caption = "PaddleOCR (:ppocr-sdk) with ONNX Runtime 1.22.0 — inscription text recognition"),
         ),
     ),
     ColophonSection(
@@ -104,7 +105,7 @@ private val colophonSections = listOf(
             ColophonEntry(
                 caption = "Auth0 Android SDK 2.11.0 — Universal Login (GitHub, Facebook, LinkedIn, X, WordPress, Discord, OpenStreetMap)",
             ),
-            ColophonEntry(caption = "Chrome Custom Tabs (androidx.browser) for Auth0 login flow"),
+            ColophonEntry(caption = "Chrome Custom Tabs (androidx.browser 1.10.0) for Auth0 login flow"),
             ColophonEntry(caption = "Custom JWT payload parsing (AuthJwt.kt) for username/provider/avatar"),
         ),
     ),

@@ -116,6 +116,7 @@ See [`ppocr-sdk/README.md`](ppocr-sdk/README.md).
 
 ## Related
 
+- End-user walkthrough (screens, buttons, features): [`docs/README.md`](docs/README.md)
 - Website & data project: [openbenches/openbenches.org](https://github.com/openbenches/openbenches.org)
 - Live site: https://openbenches.org/
 
